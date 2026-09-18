@@ -5,7 +5,7 @@
 # Files to transcribe. Relative or absolute paths (use forward slashes '/'
 # on Windows).
 files = [
-    "test_whisperblocks_audio.wav",
+    "example.wav",
     # "D:/AudioRecords/lecture_2.wav"
 ]
 
@@ -44,5 +44,5 @@ device = "cuda"
 # per-file detection. Use "auto" only for mixed-language batches — for
 # Ukrainian-only audio always set "uk" explicitly, because Whisper
 # frequently confuses Ukrainian with Russian.
-# RECOMMENDED: "uk"
-language = "uk"
+# RECOMMENDED to set language MANUALLY: "en"
+language = "auto"
