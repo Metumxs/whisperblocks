@@ -1,14 +1,23 @@
 @echo off
 chcp 65001 >nul
-title WhisperBlocks — Transcribing
+title WhisperBlocks - Transcribing
 
 cd /d "%~dp0"
 
-if exist ".venv\Scripts\python.exe" (
-    .venv\Scripts\python.exe src\transcript.py
-) else (
-    python src\transcript.py
-)
+if not exist ".venv\Scripts\python.exe" goto :no_venv
+
+call ".venv\Scripts\activate.bat"
+python src\transcript.py
 
 echo.
 pause
+exit /b 0
+
+:no_venv
+echo.
+echo  [ERROR] Python virtual environment not found in .venv\
+echo.
+echo  Run install.bat once to create it, then try again.
+echo.
+pause
+exit /b 1

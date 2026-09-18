@@ -1,0 +1,99 @@
+# ==============================================================================
+# WhisperBlocks — configuration template
+# ==============================================================================
+# This file is tracked by git and never edited by hand.
+# On first run, transcript.py copies it to config/config.toml (which is
+# gitignored) and exits so you can fill in your own values.
+#
+# Edit config/config.toml, NOT this file. Your changes here will be
+# silently ignored.
+# ==============================================================================
+
+# ==============================================================================
+# TRANSCRIPTION SETTINGS
+# ==============================================================================
+
+# Files to transcribe. Relative or absolute paths (use forward slashes '/'
+# on Windows).
+files = [
+    # "lecture.mp3",
+    # "D:/VideoRecords/lecture_2.mp4",
+]
+
+# Output mode:
+#   "timecode" → timecode-{name}--{model}.txt with timestamps
+#   "simple"   → simple-{name}--{model}.txt without timestamps
+#   "srt"      → {name}--{model}.srt subtitles only
+#   "all"      → all three files above
+# RECOMMENDED: "all"
+output_mode = "all"
+
+# Try to filter verbal fillers (ну, типу, е-е-е) via initial prompt hint.
+# Works imperfectly but cleans up the text.
+# RECOMMENDED: true
+remove_fillers = false
+
+# Auto-run preprocess.py on every timecode-*.txt output after transcription
+# finishes. Merges raw segments into fixed-duration blocks (~N seconds each).
+# Set to 0 to disable.
+# RECOMMENDED: 60
+auto_preprocess_block_seconds = 120
+
+# ==============================================================================
+# DIARIZATION SETTINGS (SPEAKER RECOGNITION)
+# ==============================================================================
+
+# Enable speaker diarization via pyannote.audio, orchestrated by WhisperX.
+# Adds one extra model download (~100 MB) and roughly 20–40% to the
+# per-file runtime, but tags every segment with a speaker label such as
+# [SPEAKER_00], [SPEAKER_01] in the output.
+#
+# One-time setup before enabling (WhisperX 3.8.x uses pyannote-audio v4):
+#   1. Log in to https://huggingface.co with your account.
+#   2. Accept the license agreement at:
+#        https://huggingface.co/pyannote/speaker-diarization-community-1
+#      The community-1 pipeline is CC-BY-4.0 and auto-approved — no manual
+#      review, but you must click through the agreement once per account.
+#   3. Create an access token at https://huggingface.co/settings/tokens
+#      and paste it into `hf_token` below.
+#
+# NOTE: older WhisperX versions (<3.8) used pyannote/speaker-diarization-3.1
+# together with pyannote/segmentation-3.0. If you pin an older WhisperX
+# release, accept those two agreements instead.
+#
+# SECURITY: hf_token is a secret. config/config.toml is gitignored exactly
+# so this token never leaves your machine. Never paste it into the example
+# file or into any chat.
+#
+# RECOMMENDED: false
+diarize = false
+
+# Hugging Face access token (starts with "hf_..."). Only used when
+# diarize = true. Leave empty when diarization is disabled.
+hf_token = ""
+
+# Optional speaker-count hints for diarization. 0 means "let the model
+# decide". If the exact number of speakers is known, set both to the
+# same value.
+# RECOMMENDED: 0
+min_speakers = 0
+max_speakers = 0
+
+# ==============================================================================
+# TECHNICAL SETTINGS (usually no need to change)
+# ==============================================================================
+
+# Model size.
+# RECOMMENDED: "large-v3-turbo"
+model_size = "large-v3-turbo"
+
+# Device: "cuda" for GPU, "cpu" for CPU-only.
+# RECOMMENDED: "cuda"
+device = "cuda"
+
+# Audio language: ISO-639-1 code ("uk", "en", "pl", ...) or "auto" for
+# per-file detection. Use "auto" only for mixed-language batches — for
+# Ukrainian-only audio always set "uk" explicitly, because Whisper
+# frequently confuses Ukrainian with Russian.
+# RECOMMENDED: "uk"
+language = "uk"

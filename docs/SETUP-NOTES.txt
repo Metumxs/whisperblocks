@@ -1,0 +1,108 @@
+WhisperBlocks - manual setup reference
+======================================
+
+Use this if install.bat fails or you prefer running commands by hand.
+All commands assume you are in the project root (folder with run.bat).
+
+STEP 1 - Create the virtual environment
+---------------------------------------
+    py -3.12 -m venv .venv
+
+If "py -3.12" reports "No runtime installed", install Python 3.12:
+    py install 3.12
+
+STEP 2 - Activate the venv
+--------------------------
+In PowerShell:
+    .venv\Scripts\activate
+
+In cmd.exe:
+    .venv\Scripts\activate.bat
+
+STEP 3 - Upgrade pip
+--------------------
+    python -m pip install --upgrade pip
+
+DO NOT use bare "pip install --upgrade pip" on Windows - it will
+error with "To modify pip, please run: ...". Always use the
+"python -m pip" form.
+
+STEP 4 - Install CUDA-enabled PyTorch (THE CRITICAL STEP)
+---------------------------------------------------------
+    pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+
+Why this step exists:
+  * PyPI only ships the CPU-only torch build on Windows.
+  * Running "pip install -r requirements.txt" alone produces an
+    environment where WhisperX loads fine but crashes on the first
+    GPU call with "Torch not compiled with CUDA enabled".
+  * The CUDA builds live on a separate PyTorch index.
+
+Why cu128 and not cu124:
+  * The cu124 index stopped receiving releases after torch 2.6.0.
+  * WhisperX 3.8.6 pins torch~=2.8.0.
+  * So cu124 gives you torch 2.6.0 and a dependency conflict.
+
+If cu128 fails (old NVIDIA driver), try cu126 instead:
+    pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+
+STEP 5 - Install the rest of the dependencies
+---------------------------------------------
+    pip install -r requirements.txt
+
+STEP 6 - Verify
+---------------
+    python -c "import torch; print(torch.cuda.is_available())"
+
+Expected output:
+    True
+
+If you see "False", torch is the CPU build. Uninstall and redo step 4:
+    pip uninstall -y torch torchaudio
+    pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+
+FULL RECOVERY - if the venv got into a broken state
+---------------------------------------------------
+Delete the folder and start over:
+
+    rmdir /s /q .venv
+
+Then repeat steps 1-6.
+
+COMMON ERRORS AND WHAT THEY MEAN
+--------------------------------
+"Torch not compiled with CUDA enabled"
+    -> CPU-only torch installed. Redo step 4.
+
+"pip check" reports conflict with torch version
+    -> Wrong CUDA index. Must be cu128 or cu126.
+
+"module 'whisperx' has no attribute 'DiarizationPipeline'"
+    -> transcript.py is out of date. Use the current version.
+
+"401 Client Error" when diarizing
+    -> Hugging Face license not accepted, or token invalid.
+       Accept the agreement at:
+       https://huggingface.co/pyannote/speaker-diarization-community-1
+
+"To modify pip, please run: ..."
+    -> You used "pip install --upgrade pip" instead of "python -m pip ..."
+
+WARNINGS YOU CAN SAFELY IGNORE
+------------------------------
+* torchcodec is not installed correctly (FFmpeg not on PATH)
+    Benign - pyannote falls back to torchaudio. Install FFmpeg via
+    "winget install Gyan.FFmpeg" to silence it.
+
+* TensorFloat-32 (TF32) has been disabled
+    Benign - pyannote disables TF32 for reproducibility.
+
+* Lightning automatically upgraded your loaded checkpoint
+    Benign - one-time checkpoint migration.
+
+* huggingface_hub cache uses symlinks ... machine does not support them
+    Benign - HF cache works without symlinks, just uses more disk.
+    Enable Windows Developer Mode to silence it.
+
+* Xet Storage is enabled ... hf_xet package is not installed
+    Benign - download is slower but works. Install "hf_xet" to speed up.
