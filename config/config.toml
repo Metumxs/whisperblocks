@@ -1,0 +1,48 @@
+# ==============================================================================
+# TRANSCRIPTION SETTINGS
+# ==============================================================================
+
+# Files to transcribe. Relative or absolute paths (use forward slashes '/'
+# on Windows).
+files = [
+    "test_whisperblocks_audio.wav",
+    # "D:/AudioRecords/lecture_2.wav"
+]
+
+# Output mode:
+#   "timecode" → timecode-{name}--{model}.txt with timestamps
+#   "simple"   → simple-{name}--{model}.txt without timestamps
+#   "srt"      → {name}--{model}.srt subtitles only
+#   "all"      → all three files above
+# RECOMMENDED: "all"
+output_mode = "all"
+
+# Try to filter verbal fillers (ну, типу, е-е-е) via initial prompt hint.
+# Works imperfectly but cleans up the text.
+# RECOMMENDED: true
+remove_fillers = true
+
+# Auto-run preprocess.py on every timecode-*.txt output after transcription
+# finishes. Merges raw segments into fixed-duration blocks (~N seconds each).
+# Set to 0 to disable.
+# RECOMMENDED: 60
+auto_preprocess_block_seconds = 60
+
+# ==============================================================================
+# TECHNICAL SETTINGS (usually no need to change)
+# ==============================================================================
+
+# Model size.
+# RECOMMENDED: "large-v3-turbo"
+model_size = "large-v3-turbo"
+
+# Device: "cuda" for GPU, "cpu" for CPU-only.
+# RECOMMENDED: "cuda"
+device = "cuda"
+
+# Audio language: ISO-639-1 code ("uk", "en", "pl", ...) or "auto" for
+# per-file detection. Use "auto" only for mixed-language batches — for
+# Ukrainian-only audio always set "uk" explicitly, because Whisper
+# frequently confuses Ukrainian with Russian.
+# RECOMMENDED: "uk"
+language = "uk"
