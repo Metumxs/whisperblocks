@@ -16,7 +16,7 @@
 # Files to transcribe. Relative or absolute paths (use forward slashes '/'
 # on Windows).
 files = [
-    # "lecture.mp3",
+    # "lecture_1.mp3",
     # "D:/VideoRecords/lecture_2.mp4",
 ]
 
@@ -31,7 +31,7 @@ output_mode = "all"
 # Try to filter verbal fillers (ну, типу, е-е-е) via initial prompt hint.
 # Works imperfectly but cleans up the text.
 # RECOMMENDED: true
-remove_fillers = false
+remove_fillers = true
 
 # Auto-run preprocess.py on every timecode-*.txt output after transcription
 # finishes. Merges raw segments into fixed-duration blocks (~N seconds each).

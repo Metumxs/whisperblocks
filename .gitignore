@@ -36,6 +36,7 @@ desktop.ini
 # tracked. On first run, transcript.py copies the example into place if
 # config.toml is missing.
 config/config.toml
+presets_configs/*
 
 # ── WhisperBlocks transcription outputs ───────────────────────────────
 # Written next to the source media. Fully reproducible from the audio
