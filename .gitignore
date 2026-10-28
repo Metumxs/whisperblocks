@@ -37,7 +37,7 @@ desktop.ini
 # config.toml is missing.
 config/config.toml
 presets_configs/*
-prompts/
+prompts/*
 
 # ── WhisperBlocks transcription outputs ───────────────────────────────
 # Written next to the source media. Fully reproducible from the audio
