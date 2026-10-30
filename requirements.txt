@@ -1,0 +1,36 @@
+# WhisperBlocks runtime dependencies.
+#
+# ── HOW TO INSTALL ────────────────────────────────────────────────────
+# DO NOT run `pip install -r requirements.txt` on a fresh venv.
+# PyPI ships the CPU-only PyTorch build on Windows, so a direct install
+# silently produces a working-but-GPU-less environment.
+#
+# Run install.bat instead — it installs CUDA-enabled PyTorch from the
+# PyTorch index BEFORE this file, in the correct order.
+#
+# See docs/README.md → Installation for the manual procedure.
+
+# ── Core transcription pipeline ───────────────────────────────────────
+# WhisperX bundles faster-whisper + ctranslate2 and adds forced
+# alignment and speaker diarization on top. Version pinned to keep
+# the transitive torch requirement aligned with install.bat.
+whisperx==3.8.6
+
+# ── Terminal UI ───────────────────────────────────────────────────────
+rich
+
+# ── CUDA 12 runtime wheels (Windows only) ─────────────────────────────
+# Ship cuBLAS and cuDNN DLLs inside site-packages so that transcript.py
+# can locate them via os.add_dll_directory() without a system-wide
+# NVIDIA CUDA Toolkit installation.
+#
+# On Linux the system CUDA runtime is used instead — these packages are
+# unnecessary there and skipped automatically by the environment marker.
+nvidia-cublas-cu12 ; platform_system == "Windows"
+nvidia-cudnn-cu12  ; platform_system == "Windows"
+
+# ── NOT LISTED HERE (installed explicitly by install.bat) ─────────────
+#   torch==2.8.0       ← must come from https://download.pytorch.org/whl/cu128
+#   torchaudio==2.8.0  ← same
+# whisperx requires torch~=2.8.0 and torchaudio~=2.8.0; listing them
+# here would be misleading because PyPI cannot satisfy the CUDA build.
