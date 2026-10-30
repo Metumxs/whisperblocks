@@ -200,12 +200,15 @@ def transcribe_file(target: Path, config: dict) -> dict:
 
     # Initial prompt primes the decoder for clean language-specific text
     # and, when remove_fillers is on, hints the model to drop verbal tics.
-    # NOTE: only the Ukrainian prompt is bundled — extend this block if
-    # the tool is used for other languages.
-    initial_prompt = (
-        "Це лекція. Грамотний текст українською мовою без слів-паразитів: "
-        if config.get("remove_fillers") else None
-    )
+    # The prompt lives in config.toml (key: initial_prompt) instead of
+    # being hardcoded here, because it is LANGUAGE-SPECIFIC.
+    #
+    # The bundled default is Ukrainian;
+    # If you transcribe non-Ukrainian audio with remove_fillers = true, edit
+    # initial_prompt in config.toml to match.
+    initial_prompt = None
+    if config.get("remove_fillers"):
+        initial_prompt = config.get("initial_prompt") or None
     asr_options: dict = {"beam_size": 5}
     if initial_prompt:
         asr_options["initial_prompt"] = initial_prompt

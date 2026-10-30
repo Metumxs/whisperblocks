@@ -33,6 +33,14 @@ output_mode = "all"
 # RECOMMENDED: true
 remove_fillers = true
 
+# Initial prompt hint for the decoder. Used only when remove_fillers = true.
+# Edit this if you transcribe non-Ukrainian audio — otherwise the decoder
+# receives a Ukrainian-language hint and quality silently degrades.
+# initial_prompt = "This is a lecture. Well-written English text without filler words: "
+# initial_prompt = "Это лекция. Грамотный текст на русском языке без слов-паразитов: "
+initial_prompt = "Це лекція. Грамотний текст українською мовою без слів-паразитів: "
+
+
 # Auto-run preprocess.py on every timecode-*.txt output after transcription
 # finishes. Merges raw segments into fixed-duration blocks (~N seconds each).
 # Set to 0 to disable.
