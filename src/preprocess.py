@@ -3,38 +3,41 @@
 preprocess.py — Merge raw Whisper transcript segments into fixed-duration
 blocks for downstream AI processing.
 
-Input (raw Whisper output):
-    Duration: 30:46 | Language: uk (100.0%)
-
+Input (timecode-*.txt, whole-second segment timestamps):
     [00:02 -> 00:14] Some text that may
     wrap onto a second line.
-    [00:14 -> 00:22] Next segment...
+    [00:14 -> 00:22] [SPEAKER_00] Next segment...
 
 Output:
-    Source: zvvb_pz1_meet.wav
-    Duration: 30:46 | Language: uk (100.0%)
-    Segments: 187 | Blocks: 31 (~60s each)
+    Source: timecode-lecture--large-v3-turbo.txt
+    Segments: 2 | Blocks: 1 (~60s each)
 
-    === BLOCK 01 | 00:02 → 01:08 ===
-    Merged text of the block, no timestamps inside.
+    === BLOCK 01 | 00:02 → 00:22 ===
+    Some text that may wrap onto a second line. [SPEAKER_00] Next segment...
 
-    === BLOCK 02 | 01:08 → 02:33 ===
-    ...
+An optional pre-segment header is passed through unchanged if supplied by
+another producer. transcript.py does not write a duration/language header.
 
-Usage:
-    python preprocess.py transcript.txt
-    python preprocess.py transcript.txt --block 90
-    python preprocess.py *.txt --outdir blocks/
+Usage (from the project root):
+    python src/preprocess.py output/lecture/timecode-lecture--large-v3-turbo.txt
+    python src/preprocess.py "output/*/timecode-*.txt" --block 90
+    python src/preprocess.py "output/*/timecode-*.txt" --overwrite
 """
 
 import argparse
+import glob
+import math
+import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from file_io import atomic_text_writer, path_exists
 
-SEGMENT_RE = re.compile(r"^\[([\d:]+)\s*->\s*([\d:]+)\]\s*(.*)$")
+
+SEGMENT_RE = re.compile(r"^\[([0-9:]+)\s*->\s*([0-9:]+)\]\s*(.*)$")
+ARROW_HEADER_RE = re.compile(r"^\[[^\]]*->[^\]]*\]")
 
 
 @dataclass
@@ -53,18 +56,37 @@ class Block:
     segment_count: int
 
 
+def validate_block_seconds(value: float) -> float:
+    """Validate programmatic calls as well as the standalone CLI."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("block duration must be a finite number greater than 0")
+    try:
+        valid = math.isfinite(value) and value > 0
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError("block duration must be a finite number greater than 0")
+    return float(value)
+
+
 def parse_timestamp(s: str) -> float:
-    """Parse 'MM:SS' or 'HH:MM:SS' into seconds."""
+    """Parse non-negative MM:SS or HH:MM:SS; minutes/seconds must be < 60."""
     parts = s.split(":")
+    if len(parts) not in (2, 3) or any(not re.fullmatch(r"[0-9]+", p) for p in parts):
+        raise ValueError(f"Invalid timestamp '{s}' (expected MM:SS or HH:MM:SS)")
     try:
         nums = [int(p) for p in parts]
-    except ValueError as e:
-        raise ValueError(f"Invalid timestamp '{s}'") from e
-    if len(nums) == 2:
-        return nums[0] * 60 + nums[1]
-    if len(nums) == 3:
-        return nums[0] * 3600 + nums[1] * 60 + nums[2]
-    raise ValueError(f"Invalid timestamp '{s}'")
+        if nums[-1] >= 60 or nums[-2] >= 60:
+            raise ValueError("minutes and seconds must be less than 60")
+        seconds = nums[0] * 60 + nums[1] if len(nums) == 2 else (
+            nums[0] * 3600 + nums[1] * 60 + nums[2]
+        )
+        value = float(seconds)
+        if not math.isfinite(value):
+            raise ValueError("timestamp must be finite")
+        return value
+    except (ValueError, OverflowError) as error:
+        raise ValueError(f"Invalid timestamp '{s}': {error}") from error
 
 
 def format_timestamp(seconds: float) -> str:
@@ -78,47 +100,51 @@ def format_timestamp(seconds: float) -> str:
 
 
 def parse_transcript(text: str) -> tuple[str, list[Segment]]:
-    """
-    Parse raw Whisper output into (header, segments).
+    """Parse segments and optional header, preserving ordinary wrapped text.
 
-    Continuation lines (not starting with a timestamp) are appended to the
-    previous segment's text with a single space.
+    Starts must be chronological; overlapping segment ranges are legitimate.
+    Only a bracketed arrow header is treated as a malformed timestamp, not
+    ordinary [SPEAKER_00] / [inaudible] / other bracketed continuation text.
     """
     header_lines: list[str] = []
     segments: list[Segment] = []
     current: Segment | None = None
 
-    for raw_line in text.splitlines():
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.rstrip()
         if not line.strip():
             continue
-
-        m = SEGMENT_RE.match(line)
-        if m:
+        match = SEGMENT_RE.match(line)
+        if match:
+            try:
+                start = parse_timestamp(match.group(1))
+                end = parse_timestamp(match.group(2))
+                if end < start:
+                    raise ValueError("segment end is before its start")
+                if current is not None and start < current.start:
+                    raise ValueError("segment starts must be non-decreasing")
+            except ValueError as error:
+                raise ValueError(f"Line {line_number}: {error}") from error
             if current is not None:
                 segments.append(current)
-            start_s, end_s, body = m.group(1), m.group(2), m.group(3)
-            current = Segment(
-                start=parse_timestamp(start_s),
-                end=parse_timestamp(end_s),
-                text=body.strip(),
-            )
+            current = Segment(start=start, end=end, text=match.group(3).strip())
+        elif ARROW_HEADER_RE.match(line):
+            raise ValueError(f"Line {line_number}: malformed timestamp header: {line}")
+        elif current is None:
+            header_lines.append(line)
         else:
-            if current is None:
-                # Pre-segment content: "Duration: ... | Language: ..."
-                header_lines.append(line)
-            else:
-                # Continuation of the current segment
-                current.text = (current.text + " " + line.strip()).strip()
+            current.text = (current.text + " " + line.strip()).strip()
 
     if current is not None:
         segments.append(current)
-
+    if not segments:
+        raise ValueError("No timestamped segments found")
     return "\n".join(header_lines), segments
 
 
 def merge_into_blocks(segments: list[Segment], block_seconds: float) -> list[Block]:
     """Greedily merge consecutive segments into blocks of ~block_seconds."""
+    block_seconds = validate_block_seconds(block_seconds)
     blocks: list[Block] = []
     if not segments:
         return blocks
@@ -131,7 +157,6 @@ def merge_into_blocks(segments: list[Segment], block_seconds: float) -> list[Blo
         if not buf:
             return
         text = " ".join(seg.text for seg in buf).strip()
-        # Collapse double spaces that can appear at segment boundaries
         text = re.sub(r"\s{2,}", " ", text)
         blocks.append(Block(
             index=len(blocks) + 1,
@@ -143,7 +168,6 @@ def merge_into_blocks(segments: list[Segment], block_seconds: float) -> list[Blo
         buf = []
 
     for seg in segments:
-        # Would adding this segment push the block past the limit?
         if buf and (seg.end - block_start) > block_seconds:
             flush()
             block_start = seg.start
@@ -154,10 +178,8 @@ def merge_into_blocks(segments: list[Segment], block_seconds: float) -> list[Blo
 
 
 def render(header: str, blocks: list[Block], source: Path, block_seconds: float) -> str:
-    """Produce the output text."""
-    lines: list[str] = []
-
-    lines.append(f"Source: {source.name}")
+    """Produce the existing block text format, including any supplied header."""
+    lines = [f"Source: {source.name}"]
     if header:
         lines.append(header)
     total_segments = sum(b.segment_count for b in blocks)
@@ -166,67 +188,115 @@ def render(header: str, blocks: list[Block], source: Path, block_seconds: float)
         f"Blocks: {len(blocks)} (~{int(block_seconds)}s each)"
     )
     lines.append("")
-
-    for b in blocks:
+    for block in blocks:
         lines.append(
-            f"=== BLOCK {b.index:02d} | "
-            f"{format_timestamp(b.start)} → {format_timestamp(b.end)} ==="
+            f"=== BLOCK {block.index:02d} | "
+            f"{format_timestamp(block.start)} → {format_timestamp(block.end)} ==="
         )
-        lines.append(b.text)
+        lines.append(block.text)
         lines.append("")
-
     return "\n".join(lines).rstrip() + "\n"
 
 
-def process_file(path: Path, block_seconds: float, outdir: Path | None) -> Path:
-    text = path.read_text(encoding="utf-8")
+def blocks_path_for(path: Path, outdir: Path | None = None) -> Path:
+    return (path.parent if outdir is None else outdir) / (path.stem + ".blocks.txt")
+
+
+def process_file(
+    path: Path, block_seconds: float, outdir: Path | None = None,
+    *, overwrite: bool = False,
+) -> Path:
+    block_seconds = validate_block_seconds(block_seconds)
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Transcript not found: {path}")
+    if not path.is_file():
+        raise ValueError(f"Transcript is not a regular file: {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeError as error:
+        raise ValueError(f"Transcript is not readable UTF-8 text: {path}") from error
     header, segments = parse_transcript(text)
-
-    if not segments:
-        raise ValueError(f"No timestamped segments found in {path.name}")
-
     blocks = merge_into_blocks(segments, block_seconds)
     output = render(header, blocks, path, block_seconds)
-
-    if outdir is None:
-        out_path = path.with_name(path.stem + ".blocks.txt")
-    else:
-        outdir.mkdir(parents=True, exist_ok=True)
-        out_path = outdir / (path.stem + ".blocks.txt")
-
-    out_path.write_text(output, encoding="utf-8")
+    out_path = blocks_path_for(path, outdir)
+    if out_path.resolve() == path.resolve():
+        raise ValueError(f"Output would replace its own input: {path}")
+    with atomic_text_writer(out_path, overwrite=overwrite) as handle:
+        handle.write(output)
     return out_path
 
 
-def main() -> int:
+def expand_inputs(patterns: list[str]) -> tuple[list[Path], list[str]]:
+    """Expand Windows CLI globs, excluding generated blocks only for globs."""
+    paths: list[Path] = []
+    errors: list[str] = []
+    seen: set[Path] = set()
+    for original in patterns:
+        pattern = original.replace("\\", os.sep) if os.name != "nt" else original
+        # An existing literal filename can contain brackets; do not interpret
+        # it as a character-class pattern unless literal lookup failed.
+        wildcard = glob.has_magic(pattern) and not path_exists(Path(pattern))
+        matches = sorted(glob.glob(pattern, recursive=True)) if wildcard else (
+            [pattern] if path_exists(Path(pattern)) else []
+        )
+        if wildcard:
+            matches = [p for p in matches if not p.lower().endswith(".blocks.txt")]
+        if not matches:
+            errors.append(f"No input transcripts matched: {original}")
+            continue
+        for match in matches:
+            path = Path(match)
+            try:
+                resolved = path.resolve()
+            except (OSError, RuntimeError) as error:
+                errors.append(f"Cannot resolve {path}: {error}")
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
+                paths.append(path)
+    return paths, errors
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Merge raw Whisper transcript segments into fixed-duration blocks."
     )
-    parser.add_argument("files", nargs="+", type=Path,
-                        help="One or more raw transcript .txt files")
+    parser.add_argument("files", nargs="+", help="Transcript paths or glob patterns")
     parser.add_argument("--block", "-b", type=float, default=60.0,
                         help="Target block duration in seconds (default: 60)")
     parser.add_argument("--outdir", "-o", type=Path, default=None,
                         help="Output directory (default: same as input)")
-    args = parser.parse_args()
+    parser.add_argument("--overwrite", action="store_true", help="Replace existing block files")
+    args = parser.parse_intermixed_args(argv)
+    try:
+        validate_block_seconds(args.block)
+    except ValueError as error:
+        parser.error(str(error))
 
-    exit_code = 0
-    for path in args.files:
-        if not path.exists():
-            print(f"✕ Not found: {path}", file=sys.stderr)
-            exit_code = 1
-            continue
+    paths, errors = expand_inputs(args.files)
+    for error in errors:
+        print(f"✕ {error}", file=sys.stderr)
+    exit_code = 1 if errors else 0
+    for path in paths:
+        out_path = blocks_path_for(path, args.outdir)
         try:
-            out = process_file(path, args.block, args.outdir)
-        except Exception as e:
-            print(f"✕ {path.name}: {e}", file=sys.stderr)
+            out = process_file(path, args.block, args.outdir, overwrite=args.overwrite)
+            size_kb = out.stat().st_size / 1024
+        except FileExistsError as error:
+            if args.overwrite:
+                print(f"✕ {path}: {error}", file=sys.stderr)
+                exit_code = 1
+            else:
+                print(f"Skipped existing: {out_path}. Use --overwrite to replace it.")
+            continue
+        except (OSError, ValueError) as error:
+            print(f"✕ {path}: {error}", file=sys.stderr)
             exit_code = 1
             continue
-        size_kb = out.stat().st_size / 1024
         print(f"✓ {path.name} → {out.name} ({size_kb:.1f} KB)")
-
     return exit_code
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

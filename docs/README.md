@@ -2,7 +2,7 @@
 > Local transcription pipeline — from audio to LLM-ready text blocks.
 
 > High-performance, fully local batch audio/video transcription using [`WhisperX`](https://github.com/m-bain/whisperX), optimized for NVIDIA GPUs (CUDA).
-> Designed for transcribing Ukrainian lectures, meetings and raw audio into structured text or subtitle files — **no cloud, no API keys, no data leaves your machine during transcription** (except for optional Hugging Face model downloads during setup).
+> Designed for transcribing Ukrainian lectures, meetings and raw audio into structured text or subtitle files — **no transcription API and no media uploads**. Model weights may be downloaded on the first real run; optional gated diarization models need a Hugging Face access token. Once all required models are cached, transcription can run locally offline.
 
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg)](https://developer.nvidia.com/cuda-toolkit)
@@ -35,13 +35,14 @@
 - **100% local transcription** — audio never leaves your machine after the models are downloaded once.
 - **GPU accelerated** — CUDA 12 + cuDNN via pip wheels, no manual CUDA Toolkit install.
 - **Batched decoding** — WhisperX batches segments for large speedups on long files.
-- **Word-level alignment** — forced alignment against a language-specific phoneme model produces millisecond-accurate word timings.
+- **Word-level alignment** — forced alignment refines word/segment boundaries internally; SRT still contains segment-level cues, not one cue per word.
 - **Optional speaker diarization** — pyannote.audio v4 tags every segment with a speaker label; runs as a third pipeline stage.
 - **Batch processing** — drop a list of files into `config.toml` and walk away.
 - **Four output modes** — timestamped text, clean plain text, `.srt` subtitles, or all at once.
 - **Filler removal** — hints the model to drop verbal tics (`ну`, `типу`, `от`, long pauses) during transcription.
 - **Auto-preprocessing** — raw timestamped output is automatically merged into fixed-duration blocks (60 s default) for downstream AI processing.
-- **Ready-made LLM prompts** — bundled system prompts (Ukrainian + English) for cleaning up transcripts without paraphrasing.
+- **Protected results** — skip existing outputs by default; opt in to replacement with `--overwrite`.
+- **Offline preflight** — validate paths and inspect the exact plan with `--dry-run`; `--check-config` also reports CUDA status without loading models.
 - **Model-aware filenames** — every output file carries the model name (`--large-v3-turbo`) so you can compare runs.
 - **Isolated environment** — dependencies live in a project-local `.venv`, never in your system Python.
 - **Secret-safe configuration** — your `config.toml` (which holds your Hugging Face token) is gitignored; a tracked template seeds it on first run.
@@ -59,9 +60,9 @@
 | **Disk** | ~8 GB free (PyTorch + models + runtimes) | SSD with ~20 GB free |
 | **CPU-only fallback** | any modern x86-64 | — (works, but 10–20× slower) |
 
-> **No NVIDIA GPU?** Set `device = "cpu"` in `config.toml` and use a smaller model such as `small` or `medium`. Note that `install.bat` still installs the CUDA build of PyTorch — the CPU build is not supported by the current dependency chain.
+> **No NVIDIA GPU?** Set `device = "cpu"` in `config.toml` and use a smaller model such as `small` or `medium`. Note that `install.bat` still installs the CUDA build of PyTorch — the installer intentionally verifies that a CUDA-enabled wheel is installed, even on CPU-only hosts.
 
-> **Why Python 3.12 specifically?** WhisperX 3.8.6 pins `Requires-Python >=3.10,<3.14` and its CUDA build of `torch` only ships wheels up to 3.12. Python 3.12 is the newest version where the whole stack is known to work.
+> **Why Python 3.12 specifically?** It is the project's supported runtime for the pinned WhisperX / PyTorch stack. `install.bat` checks both the launcher and any reused `.venv`; a different major.minor version is rejected without deleting it. Other Python versions have not been verified for the production ML workflow here.
 
 ---
 
@@ -80,11 +81,11 @@ install.bat
 The script does the following, in order:
 
 1. Verifies Python 3.12 is available via the `py` launcher.
-2. Creates `.venv\` (reuses it if it already exists).
+2. Creates `.venv\` (reuses it only after verifying it is Python 3.12).
 3. Upgrades `pip` inside the venv.
 4. **Installs CUDA-enabled PyTorch from the PyTorch index** (`cu128`) — this is the critical step.
-5. Installs WhisperX and the remaining dependencies from `requirements.txt`.
-6. Verifies `torch.cuda.is_available()` returns `True`.
+5. Installs WhisperX and the remaining dependencies from `requirements/requirements.txt`.
+6. Verifies the installed torch wheel has a CUDA runtime (`torch.version.cuda is not None`). A CPU-only wheel fails with reinstall instructions. A CUDA-enabled wheel with no active NVIDIA GPU/driver emits a warning and succeeds; set `device = "cpu"` to transcribe on that host.
 
 If Python 3.12 is not installed yet, the script prints the exact command to install it (`py install 3.12`). Do that, then re-run `install.bat`.
 
@@ -113,12 +114,12 @@ python -m pip install --upgrade pip
 pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
 # 5. Install everything else
-pip install -r requirements.txt
+pip install -r requirements/requirements.txt
 ```
 
-> **Do not skip step 4.** PyPI ships the CPU-only PyTorch build on Windows. Running `pip install -r requirements.txt` alone produces an environment where WhisperX loads fine but crashes at the first GPU call with `Torch not compiled with CUDA enabled`.
+> **Do not skip step 4.** PyPI ships the CPU-only PyTorch build on Windows. Running `pip install -r requirements/requirements.txt` alone produces an environment where WhisperX loads fine but crashes at the first GPU call with `Torch not compiled with CUDA enabled`.
 
-A condensed cheat-sheet of these commands (with recovery steps and a list of safe-to-ignore warnings) ships as `SETUP-NOTES.txt` in the project root.
+A condensed cheat-sheet of these commands (with recovery steps and a list of safe-to-ignore warnings) ships as `docs/SETUP-NOTES.txt`.
 
 ### What gets installed
 
@@ -130,11 +131,11 @@ A condensed cheat-sheet of these commands (with recovery steps and a list of saf
 | `nvidia-cublas-cu12` | cuBLAS runtime DLLs (Windows; avoids a full CUDA Toolkit install) |
 | `nvidia-cudnn-cu12` | cuDNN runtime DLLs (Windows) |
 
-> `transcript.py` automatically injects the CUDA DLL paths from these wheels into the process at startup — you do **not** need to install the NVIDIA CUDA Toolkit separately.
+> `transcript.py` registers the existing CUDA DLL paths from these wheels before importing the ML runtime on Windows, retaining their loader handles for the process lifetime — you do **not** need to install the NVIDIA CUDA Toolkit separately.
 
-### Optional: install FFmpeg
+### Install FFmpeg for media decoding
 
-WhisperX works without it, but pyannote will print a `torchcodec` warning every run and fall back to a slower audio decoder. Installing FFmpeg system-wide removes the warning and speeds up audio loading:
+WhisperX media loading uses FFmpeg. Install it and make sure `ffmpeg -version` works in the terminal used to launch the project. A separate pyannote/torchcodec decoder warning may also depend on matching decoder libraries; do not assume every decoder error is harmless:
 
 ```bash
 winget install Gyan.FFmpeg
@@ -157,31 +158,34 @@ A list of all supported combinations lives at <https://download.pytorch.org/whl/
 ## 🗂️ Project Structure
 
 ```text
-TRANSCRIBE-WhisperBlocks/
-├── install.bat                ← One-time setup (creates .venv, installs deps)
-├── run.bat                    ← One-click launcher (activates .venv)
-├── requirements.txt           ← Python dependencies
-├── SETUP-NOTES.txt            ← Cheat-sheet for manual / recovery installs
-├── .gitignore                 ← Excludes .venv/, config.toml, media, outputs
-├── .venv/                     ← Virtual environment (created by install.bat)
+WhisperBlocks/
+├── .gitignore
+├── install.bat
+├── run.bat
+├── requirements/
+│   └── requirements.txt
 ├── config/
-│   ├── config.toml            ← YOUR config (gitignored; created on first run)
-│   └── config.toml.example    ← Template (tracked in git)
+│   ├── config.toml.example       ← safe template
+│   └── config.toml               ← local only; created on first run
+├── input/
+│   └── .gitkeep                  ← media contents ignored
+├── output/
+│   ├── .gitkeep                  ← generated contents ignored
+│   └── <source-folder>/          ← transcripts, blocks, source ownership marker
 ├── src/
-│   ├── transcript.py          ← Main WhisperX pipeline (ASR → align → diarize)
-│   └── preprocess.py          ← Merges raw segments into fixed-duration blocks
-├── prompts/
-│   ├── UK-llm-ai-processing-prompt.txt    ← Ukrainian cleanup prompt
-│   └── EN-llm-ai-processing-prompt.txt    ← English cleanup prompt
-├── docs/
-│   ├── README.md              ← This file
-│   └── LICENSE                ← MIT license text
-│
-├── lecture.mp3                ← Your audio files live here (project root)
-└── ...                        ← Output files land here too
+│   ├── transcript.py             ← ASR → alignment → optional diarization
+│   ├── preprocess.py             ← greedy fixed-duration blocks
+│   └── file_io.py                ← per-file atomic UTF-8 writes
+├── tests/                        ← standard-library unittest suite
+└── docs/
+    ├── README.md
+    ├── SETUP-NOTES.txt
+    └── LICENSE
 ```
 
-**Key rule:** audio files and generated outputs live in the **project root** (next to `run.bat`). The `config/` and `src/` folders are for tooling only.
+`input/` and `output/` are created automatically on startup. Place new media in
+`input/`; nothing moves existing media or legacy transcripts automatically.
+The local `.venv/` created by `install.bat` is not tracked.
 
 ---
 
@@ -196,9 +200,9 @@ WhisperBlocks keeps **two** config files in `config/`:
 | `config.toml` | ❌ No (gitignored) | You — this is your live config |
 | `config.toml.example` | ✅ Yes | Nobody — it is a template |
 
-`config.toml` is gitignored because it holds your Hugging Face access token (`hf_token`) whenever speaker diarization is enabled. A token pasted into a public repository is a leaked token — Hugging Face will revoke it, but the exposure window still counts.
+`config.toml` is gitignored because it holds your Hugging Face access token (`hf_token`) whenever speaker diarization is enabled. A token pasted into a public repository is a leaked token — revoke/rotate it immediately; do not rely on automatic detection.
 
-**On first run** (when `config/config.toml` does not exist), `transcript.py` copies `config.toml.example` into place, prints a hint panel, and exits. You then edit `config.toml` to add your file list and re-run `run.bat`. This guarantees you never accidentally push your personal configuration.
+**On first run** (when `config/config.toml` does not exist), `transcript.py` copies `config.toml.example` into place, prints a hint panel, and exits. You then edit `config.toml` to add your file list and re-run `run.bat`. This keeps new live configs ignored by default; it cannot untrack an already committed config or prevent a deliberate force-add.
 
 **Never edit `config.toml.example`.** Your changes to it will be ignored — it only exists to seed `config.toml` on first run.
 
@@ -209,16 +213,17 @@ WhisperBlocks keeps **two** config files in `config/`:
 ```toml
 # ── Files to transcribe ─────────────────────────────────────────────
 files = [
-    "lecture.mp4",
-    "meeting.wav",
+    "input/lecture.mp4",
+    "input/meeting.wav",
     "C:/Audio/interview.m4a"
 ]
 
 # ── Output mode ─────────────────────────────────────────────────────
 output_mode = "all"
 
-# ── Filler removal ──────────────────────────────────────────────────
+# ── Decoder hint (used only when remove_fillers = true) ──────────────
 remove_fillers = true
+initial_prompt = "Це лекція. Грамотний текст українською мовою без слів-паразитів: "
 
 # ── Auto-preprocessing ──────────────────────────────────────────────
 auto_preprocess_block_seconds = 60
@@ -233,21 +238,24 @@ max_speakers = 0
 model_size = "large-v3-turbo"
 device     = "cuda"
 language   = "uk"
+batch_size = 8
 ```
 
 ### Option reference
 
-| Key | Type | Accepted values | Default |
+| Key | Type | Accepted values | Fallback (template if different) |
 |-----|------|-----------------|---------|
-| `files` | array | Any relative/absolute media path | `[]` |
-| `output_mode` | string | `timecode` \| `simple` \| `srt` \| `all` | `all` |
-| `remove_fillers` | bool | `true` \| `false` | `true` |
-| `auto_preprocess_block_seconds` | number | `0` (off) or any positive number | `60` |
+| `files` | array of non-empty strings | Relative/absolute media paths; non-empty unless CLI paths are given | `[]` (edit before use) |
+| `output_mode` | string | `timecode` \| `simple` \| `srt` \| `all`, case-insensitive | `all` |
+| `remove_fillers` | bool | `true` \| `false`; decoder hint only, no regex word deletion | `false` (template: `true`) |
+| `initial_prompt` | string | Language-specific decoder hint; used only with `remove_fillers` | empty (template: Ukrainian hint) |
+| `auto_preprocess_block_seconds` | finite number | `0` (off) or positive; requires timecode output | `60` |
 | `diarize` | bool | `true` \| `false` | `false` |
-| `hf_token` | string | `hf_...` token from Hugging Face | `""` |
-| `min_speakers` | number | `0` (auto) or any positive integer | `0` |
-| `max_speakers` | number | `0` (auto) or any positive integer | `0` |
-| `model_size` | string | See [Model Selection](#-model-selection) | `large-v3-turbo` |
+| `hf_token` | string | HF token; non-empty `HF_TOKEN` environment variable takes precedence | `""` |
+| `min_speakers` | integer | `0` (auto) or positive; must not exceed a positive `max_speakers` | `0` |
+| `max_speakers` | integer | `0` (auto) or positive | `0` |
+| `batch_size` | integer | `>= 1`; existing configs without it retain batch size 8 | `8` |
+| `model_size` | non-empty string | No `..`, path separators or Windows-illegal filename characters; no fixed model allowlist | `large-v3-turbo` |
 | `device` | string | `cuda` \| `cpu` | `cuda` |
 | `language` | string | ISO-639-1 code, or `auto` | `uk` |
 
@@ -257,23 +265,84 @@ language   = "uk"
 
 ## ▶️ Usage
 
-1. Drop your audio/video files into the **project root** (the folder with `run.bat`).
-2. List them in `config/config.toml` under `files = [...]`.
-3. Double-click **`run.bat`** — it activates `.venv` and runs the pipeline.
+1. Put new media in **`input/`** (nested folders are welcome).
+2. Edit `config/config.toml`, for example `files = ["input/course/lecture.mp3"]`.
+3. Double-click **`run.bat`**, or use the CLI with `.venv` active:
 
-   Or, from a terminal with `.venv` already active:
-
-   ```bash
-   python src/transcript.py
+   ```bat
+   run.bat --check-config
+   run.bat --dry-run
+   run.bat input\clip.mp4
+   run.bat "D:\Audio\my lecture.wav" --overwrite
+   python src/transcript.py --config config/other.toml --dry-run input/clip.mp4
    ```
 
-4. Watch the live console output. When done, output files appear next to the source audio.
+Drag one or more media files onto `run.bat` to pass their paths as positional
+arguments. CLI paths **replace**, not append to, the config's `files` list.
+`run.bat` forwards arguments and preserves Python's exit code after `pause`.
+
+### Input resolution
+
+- Absolute paths are resolved as given.
+- Relative paths first check the project root (not the current working directory).
+- If that path is absent and is not already prefixed `input/`, check `input/<path>`.
+- If both root and fallback paths exist, the root path wins with an ambiguity
+  warning; use an explicit `input/...` path to choose the other file.
+- Inputs must be readable regular files. Resolved aliases/symlinks are deduplicated
+  with a warning; no media is moved. A directory is an error, not a recursive input.
+
+### Preflight, protection and flags
+
+| Option | Behaviour |
+|--------|-----------|
+| positional `files...` | Override the config file list; quote paths containing spaces |
+| `--config PATH` | Use a custom config; relative paths are from the project root. An explicitly missing file is an error, never seeded |
+| `--dry-run` | Dashboard and exact input → output plan, including ready, skipped and invalid sources; no ML imports/models |
+| `--check-config` | Same validation/plan plus token-source and CUDA status; may import torch for status, never loads models |
+| `--overwrite` | Allow replacement of expected transcript/block files for the targeted sources; never transfer another source's output-directory ownership |
+
+The first run with a missing **default** config still seeds the template and
+exits `0`, even with diagnostic flags; edit it and rerun. Diagnostics may create
+the empty `input/` and `output/` directories but do not write transcript files.
+
+Configuration types/values are validated before ML imports; booleans are not
+accepted as numeric settings. An empty file list is invalid unless CLI files
+are supplied. Missing or unreadable inputs are reported together in preflight;
+other valid inputs still run. A non-empty `HF_TOKEN` environment variable
+(ignoring surrounding whitespace) overrides `hf_token`; only its source/status
+is displayed, never its value. Missing tokens with `diarize = true` warn upfront
+and disable only diarization. A Cyrillic decoder hint with `language != "uk"`
+(including `"auto"`) warns; the tool never rewrites that hint.
+
+If **any** expected active-mode file already exists (including `.blocks.txt`
+when enabled), that whole source is skipped **before** transcription unless
+`--overwrite` is passed. Even a partial previous run triggers this protection.
+Delete unwanted partial files manually or explicitly rerun with `--overwrite`.
+No interactive replacement prompts are used. A batch with no runnable sources
+never checks CUDA or loads ML dependencies. Diagnostic modes do not fail solely
+for a missing CUDA GPU; a real CUDA queue requires a CUDA-capable runtime/GPU
+or `device = "cpu"`.
+
+Writes use temporary sibling files, close them, then `os.replace()` each complete
+file. Errors/interrupts clean up temporary files. **This is per-file atomicity,
+not a multi-file transaction or cross-process lock**; do not run simultaneous
+writers for the same source. A late replace failure may leave other requested
+files already committed and is reported as `failed_write`.
+
+Exit codes: `0` = success / only existing-output skips / successful first-run
+seeding; `1` = any missing/invalid input, runtime, transcription, write or
+preprocessing failure; `2` = invalid configuration or CLI syntax. Diagnostics
+return `1` for missing/invalid inputs and `0` otherwise. Alignment/diarization
+failures that retain a valid transcript are warnings, not batch failures.
+The final summary distinguishes `succeeded`, `skipped_existing`,
+`missing_or_invalid`, `failed_transcription`, `failed_write`, `failed_preprocess`;
+`succeeded` counts sources whose requested preprocessing also succeeded.
 
 ---
 
 ## 📄 Output Files
 
-Every output carries a **prefix** (mode) and a **suffix** (model name). Example for `zvvb_pz1_meet.wav` transcribed with `large-v3-turbo`:
+All transcript outputs live under **`output/<source-folder>/`**, never next to the media. Filenames keep their existing mode/model conventions. Example inside `output/zvvb_pz1_meet/` for `input/zvvb_pz1_meet.wav` with `large-v3-turbo`:
 
 | File | Description |
 |------|-------------|
@@ -282,11 +351,42 @@ Every output carries a **prefix** (mode) and a **suffix** (model name). Example 
 | `simple-zvvb_pz1_meet--large-v3-turbo.txt` | Plain text, one segment per line, no timestamps |
 | `zvvb_pz1_meet--large-v3-turbo.srt` | Standard `.srt` subtitle file |
 
-When diarization is enabled, every line in the `.txt` and `.srt` files is prefixed with `[SPEAKER_NN]`.
+When diarization assigns a speaker, the segment body is prefixed with `[SPEAKER_NN]`; the timecode still comes first. SRT cue numbers/timing lines are not prefixed. Block merging preserves these tags inside the merged text.
 
 **Why the model name in the filename?** So you can transcribe the same audio with `medium` and `large-v3-turbo` and compare results side by side without renaming anything.
 
+### Source-folder mapping and collisions
+
+- Sources physically inside `input/` mirror their relative parent folders and
+  stem: `input/course/lecture.mp3` → `output/course/lecture/`. This also applies
+  when the same input file is passed by an absolute path.
+- Root-level and external sources use only a sanitized basename stem:
+  `D:/Audio/lecture.mp3` → `output/lecture/`, with no drive/parent directories.
+  Symlinks are resolved before deciding whether a source is inside `input/`.
+- Unsafe Windows characters, trailing spaces/dots and reserved device names in
+  source components are sanitized; ordinary filenames stay unchanged.
+- For a collision, sources are considered in stable canonical-path order
+  (`input/` sources first), independent of CLI list order. The first available
+  natural folder is used, then `<stem>_<extension>`, then a 10-character SHA-256
+  suffix of the canonical source path (and a deterministic numeric suffix if
+  necessary). Natural folder names requested elsewhere in the batch are reserved.
+- A local `.whisperblocks-source` marker records directory ownership before real
+  processing. It is ignored by Git along with all output contents, contains only
+  the resolved media path (no token), and is not a transcript. Existing ownership
+  wins on later runs, so separately processed colliding files do not share folders.
+  Keep markers with their output folders; relocating sources may produce a new
+  suffixed folder. Old folders without a marker retain the natural mapping and
+  skip-existing protection and emit an ownership warning; their historical ownership cannot be inferred.
+- Every computed directory/file is checked with `resolve()` to remain strictly
+  inside the resolved `output/` root. Escaping symlinks/traversal are errors.
+  Legacy transcripts beside media files are never deleted or migrated.
+
 ### Format examples
+
+Plain timecode timestamps use **whole seconds** (`MM:SS`, or `HH:MM:SS` for
+long recordings). SRT rounds to **milliseconds**, including carry into the next
+second. Word-level alignment refines internal boundaries; SRT cues remain
+**segment-level**. Duration/language is console-only, not an added file header.
 
 **`timecode`** — segment-by-segment:
 
@@ -298,7 +398,8 @@ When diarization is enabled, every line in the `.txt` and `.srt` files is prefix
 **`simple`** — plain text for pasting into an LLM:
 
 ```text
-Добрий день, сьогодні ми розглянемо основи машинного навчання.
+Добрий день, сьогодні ми розглянемо...
+...основи машинного навчання.
 ```
 
 **`.srt`** — standard subtitles for VLC, YouTube, Premiere:
@@ -313,7 +414,7 @@ When diarization is enabled, every line in the `.txt` and `.srt` files is prefix
 ...основи машинного навчання.
 ```
 
-**With diarization enabled** (`diarize = true`), every line gains a speaker tag:
+**With successful diarization enabled** (`diarize = true`), segment bodies gain a speaker tag:
 
 ```text
 [00:00 -> 00:05] [SPEAKER_00] Добрий день, сьогодні ми розглянемо...
@@ -339,9 +440,9 @@ Pyannote's diarization models are **gated** on Hugging Face: you cannot download
    - <https://huggingface.co/pyannote/speaker-diarization-community-1>
    The page has an **"Agree and access repository"** button at the top. Without clicking it, model downloads will return `401 Unauthorized`.
 3. **Create an access token** at <https://huggingface.co/settings/tokens> — a "read"-scoped token is enough.
-4. Paste the token into `config/config.toml` under `hf_token = "hf_..."` and set `diarize = true`.
+4. Set a non-empty `HF_TOKEN` environment variable or configure `hf_token` locally in `config/config.toml`, then set `diarize = true`. The environment takes precedence; do not paste real tokens into examples or logs.
 
-> **Using an older WhisperX (< 3.8)?** That version used pyannote-audio 3.x, whose models are `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`. Accept both of those agreements instead. The current `requirements.txt` pins WhisperX 3.8.6, so you only need the `community-1` agreement.
+> **Using an older WhisperX (< 3.8)?** That version used pyannote-audio 3.x, whose models are `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`. Accept both of those agreements instead. The current `requirements/requirements.txt` pins WhisperX 3.8.6, so you only need the `community-1` agreement.
 
 ### Speaker-count hints
 
@@ -351,11 +452,11 @@ If the number of speakers in the audio is known ahead of time, telling the model
 - **Exact count** — set both to the same value (e.g. 4 comedians on stage → `min_speakers = 4`, `max_speakers = 4`).
 - **Range** — set `min_speakers = 2` and `max_speakers = 5` to bound the search space.
 
-> **Known limitation.** The open-source `community-1` model — the best freely available diarization model as of 2026 — struggles with fast, overlapping dialogue between speakers with similar voices (interviews, panel shows, comedy). Short test clips make this worse: the model needs several minutes of audio to build stable speaker clusters. For a clip that is only 1–2 minutes long, forcing the exact speaker count via `min_speakers` / `max_speakers` is the single most effective tweak.
+> **Known limitation.** The open-source `community-1` model struggles with fast, overlapping dialogue between speakers with similar voices (interviews, panel shows, comedy). Short test clips make this worse: the model needs several minutes of audio to build stable speaker clusters. For a clip that is only 1–2 minutes long, forcing the exact speaker count via `min_speakers` / `max_speakers` is the single most effective tweak.
 
 ### VRAM behaviour
 
-Diarization loads a **third** model (~100 MB, but each stage's peak VRAM is what matters). On an 8 GB card, WhisperX cannot keep the ASR, alignment and diarization models resident simultaneously. `transcript.py` explicitly releases each model (`del model; gc.collect(); torch.cuda.empty_cache()`) before loading the next — do not remove that cleanup if you edit the pipeline.
+Diarization loads a **third** model (~100 MB, but each stage's peak VRAM is what matters). On an 8 GB card, WhisperX cannot keep the ASR, alignment and diarization models resident simultaneously. `transcript.py` explicitly releases each model (clear model references, then `gc.collect(); torch.cuda.empty_cache()`) in `finally` before loading the next, including stage exceptions — do not remove that cleanup if you edit the pipeline.
 
 ### Trade-offs
 
@@ -377,20 +478,16 @@ Whisper segments audio by **silence**, not by **meaning**. A sentence can be spl
 
 `preprocess.py` solves this by merging consecutive segments into **fixed-duration blocks** (~60 s by default). The result is a much cleaner structure for downstream AI processing.
 
-**Triggered automatically** at the end of every transcription run when `auto_preprocess_block_seconds > 0`.
+**Triggered automatically** at the end of a batch for successfully written timecode files when `auto_preprocess_block_seconds > 0`. The code fallback and bundled template both use **60**; an existing live value such as `120` is honored. Modes `simple` / `srt` do not generate timecode files and warn upfront if auto-preprocessing is configured.
 
 ### Output format
 
 ```text
 Source: timecode-zvvb_pz1_meet--large-v3-turbo.txt
-Duration: 30:46 | Language: uk (100.0%)
-Segments: 352 | Blocks: 32 (~60s each)
+Segments: 2 | Blocks: 1 (~60s each)
 
-=== BLOCK 01 | 00:02 → 01:02 ===
-Merged text of the block, no timestamps inside.
-
-=== BLOCK 02 | 01:02 → 02:01 ===
-...
+=== BLOCK 01 | 00:00 → 00:11 ===
+Добрий день, сьогодні ми розглянемо... ...основи машинного навчання.
 ```
 
 ### Manual use
@@ -398,73 +495,33 @@ Merged text of the block, no timestamps inside.
 The script also works standalone:
 
 ```bash
-python src/preprocess.py timecode-*.txt
-python src/preprocess.py timecode-*.txt --block 90
-python src/preprocess.py timecode-*.txt --outdir blocks/
+python src/preprocess.py "output/*/timecode-*.txt"
+python src/preprocess.py "output/**/timecode-*.txt" --block 90
+python src/preprocess.py "output/*/timecode-*.txt" --outdir output/manual-blocks --overwrite
 ```
+
+The standalone script expands wildcard patterns itself (also Windows
+`output\*\timecode-*.txt`, or recursive `output\**\timecode-*.txt`). It excludes
+`*.blocks.txt` from wildcard matches, preserves existing literal filenames with brackets, deduplicates resolved paths in order, and
+returns non-zero for each unmatched input/pattern. Existing block outputs are
+skipped unless `--overwrite` is passed. `--block` must be finite and `> 0`.
+Inputs must be readable UTF-8 regular files with at least one timestamped
+segment. Starts must be non-decreasing; overlapping segments are accepted.
+Malformed bracketed arrow timecodes, negative/out-of-range times and `end < start`
+are errors with line numbers; ordinary `[SPEAKER_00]` / `[inaudible]` wrapped
+text is preserved. An optional header from another producer is passed through;
+WhisperBlocks itself does not generate a duration/language file header.
 
 ---
 
 ## 🤖 LLM Post-Processing
 
-Even after auto-preprocessing, the `.blocks.txt` file is still **raw Whisper output**: full of filler words, false starts, broken punctuation, and occasional ASR errors. Cleaning this up properly requires an LLM.
-
-### Why not automatic?
-
-There is **no API integration** in this tool. The workflow is manual: you copy blocks from the `.blocks.txt` file into your favorite LLM chat (ChatGPT, Claude, local model), and get back cleaned text. This is intentional — it keeps transcription fully offline, and lets you pick whichever LLM you trust.
-
-### Bundled prompts
-
-Two ready-made **system prompts** are included in `prompts/`:
-
-| File | Language | Purpose |
-|------|----------|---------|
-| `UK-llm-ai-processing-prompt.txt` | Ukrainian | Cleanup rules, prohibitions, and domain dictionary for Ukrainian lectures |
-| `EN-llm-ai-processing-prompt.txt` | English | Same for English transcripts |
-
-Both prompts enforce strict rules:
-
-- **No paraphrasing** — the lecturer's exact phrasing is preserved.
-- **No shortening** — long sentences stay long.
-- **No additions** — no invented headers, summaries, or explanations.
-- **Filler removal** — `ну`, `фактично`, `типу`, `так?` etc. dropped only when they act as pause-fillers.
-- **False start fixing** — `"я вже, я вже говорила"` → `"я вже говорила"`.
-- **Broken sentence closing** — sentences split between blocks are moved back together.
-- **ASR error correction** — only when context unambiguously dictates the fix; otherwise the original is kept with a `<!-- ? -->` marker.
-- **Grammar & punctuation** — agreement, articles, comma splices fixed without touching meaning.
-
-Each prompt ends with a domain dictionary for business/entrepreneurship lectures — extend it with your own terminology when needed.
-
-### Recommended workflow
-
-1. **Open a new chat** with your LLM.
-2. **Paste the system prompt** (`UK-llm-ai-processing-prompt.txt` or `EN-...`) as the first message — or into the dedicated "System" field if the chat has one.
-3. **Copy 5–10 blocks** from the `.blocks.txt` file (not all 32 — the LLM loses focus on long inputs).
-4. **Ask the LLM** to clean them and return the same `=== BLOCK NN ===` structure.
-5. **Repeat** in batches for the remaining blocks.
-6. **Concatenate** the cleaned batches back into one file.
-
-### Why batches of 5–10 blocks?
-
-| Reason | Explanation |
-|--------|-------------|
-| **Focus** | On a 30-minute file with 32 blocks, the model forgets the rules by the middle. |
-| **Context** | 5–10 blocks ≈ 7–10 minutes of audio — enough for the model to see cross-block sentence continuations. |
-| **Verification** | Easy to spot-check one batch against the original audio. |
-| **Recovery** | If the model starts paraphrasing on batch 3, you only lose one batch. |
-
-### Quality tips
-
-- **Verify the first 2–3 blocks manually.** If the LLM is paraphrasing, add to the system prompt: *"Forbidden to reorder words within a sentence."*
-- **Chunk the request too, not just the input.** Don't ask "clean 10 blocks and reformat as a summary" — one task per request.
-- **Watch for `<-- ? -->` markers.** They indicate the model wasn't confident — go back to the audio and decide manually.
-- **Extend the domain dictionary.** Every new lecture introduces new jargon. Add it to the `DOMAIN DICTIONARY` section of the prompt before the next run.
-
-### What the LLM step does **not** do
-
-- It does not run automatically. You paste, it cleans, you copy back.
-- It does not touch the audio. Correction is text-only.
-- It does not verify against the source. If the LLM hallucinates, you won't catch it — hence the strict prohibitions and the small batch size.
+There is no LLM API integration. Copy a small batch (for example 5–10 blocks)
+from `.blocks.txt` into an LLM of your choice and ask it to correct obvious ASR
+errors and punctuation without paraphrasing, shortening, inventing content or
+changing block boundaries. Verify the result against the source audio before
+continuing. Use a local LLM if transcript text must remain offline; pasting text
+into a hosted service shares that text with the chosen service.
 
 ---
 
@@ -492,27 +549,30 @@ Each prompt ends with a domain dictionary for business/entrepreneurship lectures
 | `[ERROR] Python virtual environment not found` (from `run.bat`) | `.venv` was never created | Run `install.bat` once |
 | `[ERROR] Python 3.12 not found` (from `install.bat`) | Python 3.12 is not installed | `py install 3.12` or `winget install Python.Python.3.12`, then re-run `install.bat` |
 | `First run — configuration created` panel appears, then the script exits | `config/config.toml` did not exist (expected on the very first run) | Edit `config/config.toml` (file list, language, hf_token) and re-run `run.bat` |
-| `no template to copy from at ...config.toml.example` | Archive extracted incompletely | Re-extract the project — `config/config.toml.example` must exist |
-| `✕ Failed: ... Torch not compiled with CUDA enabled` | PyTorch CPU build was installed instead of the CUDA build | Reinstall: `pip uninstall -y torch torchaudio` then `pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128` |
+| `Configuration error` mentioning a missing `config.toml.example` | Archive extracted incompletely | Re-extract the project — `config/config.toml.example` must exist |
+| `Transcription ... Torch not compiled with CUDA enabled` | PyTorch CPU build was installed instead of the CUDA build | Reinstall: `pip uninstall -y torch torchaudio` then `pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128` |
 | `pip check` reports conflicts involving `torch` version | Wrong CUDA index used (cu124 caps at torch 2.6.0) | Use `cu128` (or `cu126`) — WhisperX 3.8.6 needs `torch~=2.8.0` |
 | `module 'whisperx' has no attribute 'DiarizationPipeline'` | WhisperX 3.3.4+ moved the class out of the top-level namespace | Already fixed in `src/transcript.py` — it imports from `whisperx.diarize`. If you see this, your `transcript.py` is out of date. |
-| `ModuleNotFoundError: No module named 'whisperx'` | Install ran outside the venv | `.venv\Scripts\activate` first, then `pip install -r requirements.txt` |
-| `RuntimeError: Library cublas64_12.dll is not found` | NVIDIA runtime wheels missing | `.venv\Scripts\activate` then `pip install -r requirements.txt` |
+| `ModuleNotFoundError: No module named 'whisperx'` | Install ran outside the venv | `.venv\Scripts\activate` first, then `pip install -r requirements/requirements.txt` |
+| `RuntimeError: Library cublas64_12.dll is not found` | NVIDIA runtime wheels missing | `.venv\Scripts\activate` then `pip install -r requirements/requirements.txt` |
 | `RuntimeError: Library cudnn_ops_infer64_8.dll is not found` | Same as above | Same as above |
-| `UserWarning: torchcodec is not installed correctly` | FFmpeg not on `PATH` | Benign — pyannote falls back to torchaudio. To silence: `winget install Gyan.FFmpeg` |
+| `UserWarning: torchcodec is not installed correctly` | Decoder/runtime mismatch or FFmpeg unavailable | Verify `ffmpeg -version` and the installed decoder/runtime; if a stage actually fails, inspect that error rather than assuming fallback |
 | `ReproducibilityWarning: TensorFloat-32 (TF32) has been disabled` | pyannote disables TF32 for reproducibility | Benign — informational only |
 | `Lightning automatically upgraded your loaded checkpoint` | One-time checkpoint migration | Benign — informational only |
 | `huggingface_hub cache uses symlinks ... machine does not support them` | Windows symlink policy | Benign — HF cache works without symlinks. Enable Developer Mode to silence |
 | `Xet Storage is enabled ... hf_xet package is not installed` | Optional HF accelerator missing | Benign. Install with `pip install hf_xet` in the venv to speed up downloads |
 | `std(): degrees of freedom is <= 0` (pyannote pooling) | Very short segments in the input | Benign — affects short clips more. Use longer audio or set `min_speakers`/`max_speakers` |
 | Diarization assigns the wrong speaker to overlapping lines | Known limitation of `community-1` on fast, overlapping dialogue | Try `min_speakers`/`max_speakers` hints, use longer audio, or accept that some lines will be misattributed |
-| `CUDA out of memory` at the alignment or diarization stage | Previous model wasn't released | Confirm the `del model` / `flush_vram()` block is still present in `src/transcript.py` |
+| `CUDA out of memory` at the alignment or diarization stage | Previous model wasn't released | Confirm the `finally` model-release / `flush_vram()` blocks are still present in `src/transcript.py` |
 | `CUDA out of memory` at the ASR stage | Model too large for VRAM | Use `large-v3-turbo` or `medium`, or set `device = "cpu"` |
 | `401 Client Error` when diarizing | pyannote license not accepted, or token invalid | Accept the license at `pyannote/speaker-diarization-community-1`, regenerate the HF token, update `config.toml` |
 | `Diarization failed` warning, script continues | Any diarization error | The pipeline falls through gracefully — transcript is written without speaker tags |
 | `alignment skipped` warning, script continues | Language has no phoneme model on HF | Expected for rare languages; segments keep their ASR timestamps |
 | `preprocess.py not importable` | Missing file in `src/` | Ensure `src/preprocess.py` exists next to `src/transcript.py` |
-| `✕ Skipped: file not found` | Audio not in project root | Relative paths in `files` are resolved from the project root |
+| `invalid_or_missing: ... Input not found` | Input path absent or unreadable | Check root-first / `input/` fallback resolution with `--dry-run` |
+| `skipped_existing` | At least one expected output exists | Inspect the plan; pass `--overwrite` only if replacement is intended |
+| `CUDA is not available` | No CUDA GPU/driver or wrong torch wheel | Check `torch.version.cuda` and driver; use `device = "cpu"` for fallback |
+| Existing `.venv` is not Python 3.12 | Wrong environment runtime | Delete `.venv` manually if appropriate and rerun `install.bat`; it is never auto-deleted |
 | Garbled or mixed-language output | Wrong `language` value | Set `language = "uk"` explicitly instead of `"auto"` |
 | First run hangs for several minutes | Model download in progress | Expected — WhisperX + aligner + (optionally) diarization models are fetched once to `~/.cache/huggingface/hub` |
 
@@ -542,7 +602,7 @@ So you can run the same audio through different models and compare the results d
 Yes. Set `auto_preprocess_block_seconds = 0` in the config, or run `python src/preprocess.py` manually later.
 
 **Can I use a different LLM for cleanup?**
-Yes — the prompts are plain text, model-agnostic. They work with any chat LLM. For fully offline processing, use a local model via Ollama or LM Studio with a 30B+ parameter model.
+Yes — copy `.blocks.txt` batches into whichever LLM you trust. For fully offline cleanup, use a local model and verify its edits manually.
 
 **Why a virtual environment instead of a system-wide install?**
 WhisperX pins specific versions of `torch`, `ctranslate2` and `pyannote` that will collide with other Python projects on the same machine. `.venv` isolates them and makes the environment disposable — deleting `.venv\` has zero effect on your system Python.
@@ -558,6 +618,24 @@ Adding it to `.gitignore` does not remove it from git history. Run `git rm --cac
 
 **Do the speaker labels match across files?**
 No. `SPEAKER_00` in file A is not the same voice as `SPEAKER_00` in file B. Diarization is per-file.
+
+---
+
+## 🧪 Offline Development Checks
+
+From the project root:
+
+```bash
+python -m unittest discover -s tests -v
+python -m py_compile src/transcript.py src/preprocess.py src/file_io.py tests/support.py tests/test_config.py tests/test_paths.py tests/test_io.py tests/test_preprocess.py tests/test_batch.py tests/test_pipeline.py tests/test_launchers.py
+python -c "import pathlib, tomllib; tomllib.loads(pathlib.Path('config/config.toml.example').read_text(encoding='utf-8')); print('TOML OK')"
+```
+
+Tests use `unittest`, temporary synthetic files and mocked torch/WhisperX/UI
+boundaries; no GPU, real media, model downloads, network or extra test packages.
+They never invoke the real installer. Git ignore checks use a temporary Git
+repository when Git is available. Python 3.12 is still the production target;
+Linux/offline checks are not proof of live Windows/CUDA compatibility.
 
 ---
 

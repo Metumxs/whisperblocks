@@ -1,4 +1,5 @@
 @echo off
+setlocal
 chcp 65001 >nul
 title WhisperBlocks - Transcribing
 
@@ -7,11 +8,12 @@ cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" goto :no_venv
 
 call ".venv\Scripts\activate.bat"
-python src\transcript.py
+python src\transcript.py %*
+set "EXIT_CODE=%errorlevel%"
 
 echo.
 pause
-exit /b 0
+exit /b %EXIT_CODE%
 
 :no_venv
 echo.

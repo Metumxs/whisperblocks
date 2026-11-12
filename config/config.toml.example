@@ -13,13 +13,17 @@
 # TRANSCRIPTION SETTINGS
 # ==============================================================================
 
-# Files to transcribe. Relative or absolute paths (use forward slashes '/'
-# on Windows).
+# Files to transcribe (or override this list with positional CLI paths).
+# Prefer input/; use forward slashes on Windows. Relative paths first
+# check the project root, then input/ unless already prefixed with input/.
+# Media files are never moved automatically.
 files = [
-    # "lecture_1.mp3",
+    # "input/lecture_1.mp3",
     # "D:/VideoRecords/lecture_2.mp4",
 ]
 
+# Output mode (case-insensitive); all results go under output/<source-folder>/.
+# Existing outputs skip the whole source unless --overwrite is passed.
 # Output mode:
 #   "timecode" → timecode-{name}--{model}.txt with timestamps
 #   "simple"   → simple-{name}--{model}.txt without timestamps
@@ -43,9 +47,9 @@ initial_prompt = "Це лекція. Грамотний текст україн�
 
 # Auto-run preprocess.py on every timecode-*.txt output after transcription
 # finishes. Merges raw segments into fixed-duration blocks (~N seconds each).
-# Set to 0 to disable.
+# Set to 0 to disable. Only runs for output_mode = "timecode" or "all".
 # RECOMMENDED: 60
-auto_preprocess_block_seconds = 120
+auto_preprocess_block_seconds = 60
 
 # ==============================================================================
 # DIARIZATION SETTINGS (SPEAKER RECOGNITION)
@@ -77,7 +81,8 @@ auto_preprocess_block_seconds = 120
 diarize = false
 
 # Hugging Face access token (starts with "hf_..."). Only used when
-# diarize = true. Leave empty when diarization is disabled.
+# diarize = true. A non-empty HF_TOKEN environment variable overrides this
+# value. Leave empty when diarization is disabled; never commit a real token.
 hf_token = ""
 
 # Optional speaker-count hints for diarization. 0 means "let the model
@@ -105,3 +110,7 @@ device = "cuda"
 # frequently confuses Ukrainian with Russian.
 # RECOMMENDED: "uk"
 language = "uk"
+
+# WhisperX ASR batch size. Must be an integer >= 1.
+# RECOMMENDED: 8 (also the fallback for existing configs without this key).
+batch_size = 8

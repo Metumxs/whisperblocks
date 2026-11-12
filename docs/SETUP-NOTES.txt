@@ -1,108 +1,182 @@
-WhisperBlocks - manual setup reference
-======================================
+WhisperBlocks - manual setup / recovery reference
+================================================
 
-Use this if install.bat fails or you prefer running commands by hand.
-All commands assume you are in the project root (folder with run.bat).
+This file lives at docs/SETUP-NOTES.txt.
+All commands below assume the PROJECT ROOT (folder with run.bat).
+Production target: Windows 10/11 and Python 3.12.
+Never run installation/model downloads as part of the offline test suite.
 
-STEP 1 - Create the virtual environment
----------------------------------------
+STEP 1 - Create a Python 3.12 virtual environment
+------------------------------------------------
     py -3.12 -m venv .venv
 
-If "py -3.12" reports "No runtime installed", install Python 3.12:
+If Python 3.12 is missing:
     py install 3.12
+or:
+    winget install Python.Python.3.12
+
+Before reusing an existing environment, check its actual runtime:
+    .venv\Scripts\python.exe -c "import sys; print(sys.version)"
+
+install.bat rejects an existing .venv with a major.minor other than 3.12.
+It tells you to delete .venv MANUALLY and rerun; it never deletes it itself.
 
 STEP 2 - Activate the venv
 --------------------------
-In PowerShell:
-    .venv\Scripts\activate
-
-In cmd.exe:
+PowerShell:
+    .venv\Scripts\Activate.ps1
+cmd.exe:
     .venv\Scripts\activate.bat
 
 STEP 3 - Upgrade pip
 --------------------
     python -m pip install --upgrade pip
 
-DO NOT use bare "pip install --upgrade pip" on Windows - it will
-error with "To modify pip, please run: ...". Always use the
-"python -m pip" form.
+Use the python -m pip form when upgrading pip on Windows.
 
-STEP 4 - Install CUDA-enabled PyTorch (THE CRITICAL STEP)
----------------------------------------------------------
-    pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+STEP 4 - Install CUDA-enabled PyTorch FIRST
+------------------------------------------
+    python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
-Why this step exists:
-  * PyPI only ships the CPU-only torch build on Windows.
-  * Running "pip install -r requirements.txt" alone produces an
-    environment where WhisperX loads fine but crashes on the first
-    GPU call with "Torch not compiled with CUDA enabled".
-  * The CUDA builds live on a separate PyTorch index.
-
-Why cu128 and not cu124:
-  * The cu124 index stopped receiving releases after torch 2.6.0.
-  * WhisperX 3.8.6 pins torch~=2.8.0.
-  * So cu124 gives you torch 2.6.0 and a dependency conflict.
-
-If cu128 fails (old NVIDIA driver), try cu126 instead:
-    pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+Do not replace this with an unqualified PyPI torch install. Preserve the
+explicit CUDA wheel index and the order before requirements installation.
+WhisperX 3.8.6 needs torch~=2.8.0 / torchaudio~=2.8.0. The cu124 index does
+not provide the intended pinned combination. For a driver/index compatibility
+issue, the existing alternative is cu126 with the SAME 2.8.0 pins:
+    python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126
 
 STEP 5 - Install the rest of the dependencies
----------------------------------------------
-    pip install -r requirements.txt
+--------------------------------------------
+    python -m pip install -r requirements/requirements.txt
 
-STEP 6 - Verify
----------------
-    python -c "import torch; print(torch.cuda.is_available())"
+This file has no unqualified torch/torchaudio requirement. Run commands from
+the project root; there is no longer a root-level requirements.txt copy.
 
-Expected output:
-    True
+STEP 6 - Distinguish wheel build from GPU availability
+-----------------------------------------------------
+    python -c "import torch; print('CUDA runtime:', torch.version.cuda); print('GPU available:', torch.cuda.is_available())"
 
-If you see "False", torch is the CPU build. Uninstall and redo step 4:
-    pip uninstall -y torch torchaudio
-    pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+A) torch.version.cuda is None:
+   CPU-only wheel; installer verification FAILS. Activate .venv, then repair:
+    python -m pip uninstall -y torch torchaudio
+    python -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+   Rerun install.bat afterwards.
 
-FULL RECOVERY - if the venv got into a broken state
----------------------------------------------------
-Delete the folder and start over:
+B) torch.version.cuda is not None, GPU available is False:
+   CUDA-enabled wheel is installed, but no active NVIDIA GPU/driver is
+   available. install.bat WARNS and SUCCEEDS; False alone does NOT prove a
+   CPU-only wheel. Check the driver/GPU for CUDA use, or set device = "cpu"
+   in your local config/config.toml for CPU fallback.
 
-    rmdir /s /q .venv
+C) CUDA runtime is present and GPU available is True:
+   CUDA is ready for a real transcription run.
 
-Then repeat steps 1-6.
+FFmpeg is needed for media decoding. Install it and reopen the terminal:
+    winget install Gyan.FFmpeg
+    ffmpeg -version
 
-COMMON ERRORS AND WHAT THEY MEAN
---------------------------------
-"Torch not compiled with CUDA enabled"
-    -> CPU-only torch installed. Redo step 4.
+RUNNING / PREFLIGHT
+-------------------
+First run seeds config/config.toml from the safe example and exits 0. Edit
+ONLY your live config afterwards; an existing live config is never replaced.
+Put new media in input/ (nested folders supported); do not move legacy media
+or generated transcripts automatically. input/ and output/ are auto-created.
 
-"pip check" reports conflict with torch version
-    -> Wrong CUDA index. Must be cu128 or cu126.
+    run.bat --check-config
+    run.bat --dry-run
+    run.bat input\lecture.mp3
+    run.bat "D:\Audio\my lecture.wav" --overwrite
+    run.bat --config config/other.toml --dry-run
 
-"module 'whisperx' has no attribute 'DiarizationPipeline'"
-    -> transcript.py is out of date. Use the current version.
+Drag-and-drop onto run.bat passes positional file paths. These REPLACE the
+config's files list. Relative paths check the project root first, then
+input/ if needed (unless already input/-prefixed); root wins with a warning
+when both exist. --config relative paths also use the project root; an
+explicitly missing custom config is an error, not a first-run seed.
 
-"401 Client Error" when diarizing
-    -> Hugging Face license not accepted, or token invalid.
-       Accept the agreement at:
-       https://huggingface.co/pyannote/speaker-diarization-community-1
+Results: output/<source-folder>/timecode-...txt, simple-...txt, ...srt,
+and optional timecode-...blocks.txt. Nested input/course/a.mp3 maps to
+output/course/a/. External/root inputs use a sanitized basename stem.
+Collisions use extension and then stable hash suffixes; local source markers
+preserve output-folder ownership across runs. See docs/README.md for details.
 
-"To modify pip, please run: ..."
-    -> You used "pip install --upgrade pip" instead of "python -m pip ..."
+If ANY expected active-mode output exists, skip that source before using
+models/GPU. This includes its blocks file when enabled. --overwrite permits
+replacement for that source, with no interactive prompt. Writes use temporary
+siblings and os.replace per file, NOT multi-file transactions/concurrent locks.
+Do not run concurrent writers for the same source.
 
-WARNINGS YOU CAN SAFELY IGNORE
-------------------------------
-* torchcodec is not installed correctly (FFmpeg not on PATH)
-    Benign - pyannote falls back to torchaudio. Install FFmpeg via
-    "winget install Gyan.FFmpeg" to silence it.
+--dry-run prints the exact plan without ML imports. --check-config also
+reports token source and CUDA status, but loads no models. Neither fails
+solely because there is no CUDA GPU. Missing/invalid inputs yield non-zero;
+valid items in a real batch still run. All-skipped/all-invalid real batches
+never import torch or WhisperX. Invalid configs fail before ML imports.
 
-* TensorFloat-32 (TF32) has been disabled
-    Benign - pyannote disables TF32 for reproducibility.
+Exit codes: 0 success/only existing skips/first-run seed; 1 batch/runtime or
+input failures; 2 config/CLI errors. run.bat preserves Python's exit code.
+Summary counters: succeeded, skipped_existing, missing_or_invalid,
+failed_transcription, failed_write, failed_preprocess. Optional alignment or
+diarization errors are warnings if a valid transcript remains.
 
-* Lightning automatically upgraded your loaded checkpoint
-    Benign - one-time checkpoint migration.
+CONFIG NOTES
+-------------
+auto_preprocess_block_seconds fallback/template: 60; 0 disables it. Existing
+live values such as 120 are honored. Positive finite numbers work; only
+output_mode = "timecode" or "all" generates inputs for auto-preprocessing.
+batch_size: positive integer, default 8 (old configs remain valid).
+initial_prompt: used unchanged only with remove_fillers = true; match the
+transcription language. Cyrillic hints with language != "uk" warn upfront.
+HF_TOKEN: a non-empty environment value overrides local hf_token. Tokens
+are never displayed. Missing tokens disable diarization with a warning.
+Keep config/config.toml private; never paste real tokens into the example.
 
-* huggingface_hub cache uses symlinks ... machine does not support them
-    Benign - HF cache works without symlinks, just uses more disk.
-    Enable Windows Developer Mode to silence it.
+Plain timecode text has whole-second segment timestamps. SRT has rounded
+millisecond SEGMENT-level cues, not word-level cues. Duration/language is
+shown on the console, not inserted into transcript/block file headers.
 
-* Xet Storage is enabled ... hf_xet package is not installed
-    Benign - download is slower but works. Install "hf_xet" to speed up.
+MANUAL PREPROCESSING
+--------------------
+    python src/preprocess.py "output\*\timecode-*.txt" --block 60
+    python src/preprocess.py "output\**\timecode-*.txt" --overwrite
+
+Globs are expanded in Python, exclude *.blocks.txt, and deduplicate paths.
+Unmatched patterns/paths, malformed times, unreadable/non-UTF-8 files, or zero
+segments return non-zero. --block must be finite and > 0. Existing block
+outputs skip by default; --overwrite explicitly replaces them atomically.
+
+OFFLINE DEVELOPMENT CHECKS (no models, GPU or network)
+-----------------------------------------------------
+    python -m unittest discover -s tests -v
+    python -m py_compile src/transcript.py src/preprocess.py src/file_io.py tests/support.py tests/test_config.py tests/test_paths.py tests/test_io.py tests/test_preprocess.py tests/test_batch.py tests/test_pipeline.py tests/test_launchers.py
+    python -c "import pathlib, tomllib; tomllib.loads(pathlib.Path('config/config.toml.example').read_text(encoding='utf-8')); print('TOML OK')"
+
+Tests use only unittest/standard-library mocks and temporary synthetic files;
+UI/ML boundaries are stubbed. Windows batch launchers are statically checked;
+their embedded verifier Python code is tested, not the real installation.
+
+FULL RECOVERY - MANUAL ONLY
+---------------------------
+If you choose to discard a broken environment, close Python processes and
+manually delete ONLY .venv, then repeat steps 1-6. This does not delete your
+config, input, output or downloaded model caches. install.bat never does this
+for you.
+
+COMMON ERRORS
+--------------
+"Torch not compiled with CUDA enabled": inspect torch.version.cuda, repair
+with step 4; do not infer the wheel build from is_available() alone.
+"401 Client Error" during diarization: verify token and accept the agreement
+at https://huggingface.co/pyannote/speaker-diarization-community-1.
+"module 'whisperx' has no attribute 'DiarizationPipeline'": use the current
+script (imports whisperx.diarize.DiarizationPipeline).
+CUDA out of memory: try a smaller model or lower batch_size; preserve
+finally-based sequential model release in all three pipeline stages.
+
+WARNINGS
+---------
+TF32 disabled / Lightning checkpoint upgraded / Hugging Face symlinks not
+supported: often informational. Read actual stage errors separately.
+Torchcodec decoder warnings can involve FFmpeg or library compatibility;
+verify decoding instead of assuming all such warnings are harmless.
+Alignment/diarization failures may degrade to raw segments/no speaker tags;
+a write/preprocess failure is NOT success and yields exit code 1.

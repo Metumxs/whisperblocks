@@ -1,7 +1,7 @@
 # WhisperBlocks runtime dependencies.
 #
 # ── HOW TO INSTALL ────────────────────────────────────────────────────
-# DO NOT run `pip install -r requirements.txt` on a fresh venv.
+# DO NOT run `pip install -r requirements/requirements.txt` on a fresh venv.
 # PyPI ships the CPU-only PyTorch build on Windows, so a direct install
 # silently produces a working-but-GPU-less environment.
 #

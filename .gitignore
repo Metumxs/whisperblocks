@@ -1,63 +1,33 @@
-# ── Python ────────────────────────────────────────────────────────────
+# Local environment and Python caches
+.venv/
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
 
-# ── Virtual environments ──────────────────────────────────────────────
-.venv/
-venv/
-ENV/
-env/
+# Live configuration / secrets (the safe example stays tracked)
+/config/config.toml
+.env
+.env.*
 
-# ── Packaging / build artefacts ───────────────────────────────────────
-build/
-dist/
-*.egg-info/
-.eggs/
+# Dedicated user media and generated results; preserve directory placeholders
+/input/*
+!/input/.gitkeep
+/output/*
+!/output/.gitkeep
 
-# ── IDE / editors ─────────────────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# ── OS cruft ──────────────────────────────────────────────────────────
-Thumbs.db
-desktop.ini
-.DS_Store
-
-# ── User configuration ────────────────────────────────────────────────
-# config.toml holds a Hugging Face access token (hf_token) when speaker
-# diarization is enabled. It is a secret and must never be committed.
-# A safe template lives at config/config.toml.example — that one IS
-# tracked. On first run, transcript.py copies the example into place if
-# config.toml is missing.
-config/config.toml
-presets_configs/*
-prompts/*
-
-# ── WhisperBlocks transcription outputs ───────────────────────────────
-# Written next to the source media. Fully reproducible from the audio
-# file + config/config.toml, so there is no reason to commit them.
-timecode-*.txt
-simple-*.txt
-*.blocks.txt
-*.srt
-
-# ── Media files (large; usually not committed) ────────────────────────
-# To commit a specific small sample, add a negation rule, e.g.:
-#     !samples/hello.wav
+# Legacy media and transcripts can still live elsewhere; never commit them
 *.mp3
 *.wav
 *.m4a
+*.aac
 *.flac
 *.ogg
-*.opus
 *.mp4
 *.mkv
 *.mov
 *.avi
 *.webm
+timecode-*.txt
+simple-*.txt
+*.blocks.txt
+*.srt
+*.tmp
