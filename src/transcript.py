@@ -2,6 +2,7 @@ import argparse
 import gc
 import hashlib
 import importlib
+import json
 import math
 import os
 import re
@@ -39,6 +40,11 @@ _DLL_DIRECTORY_HANDLES: list = []
 _DLL_DIRECTORIES: set[str] = set()
 SOURCE_MARKER = ".whisperblocks-source"
 
+# Optional machine-readable progress for the desktop GUI (src/gui). Silent
+# unless WHISPERBLOCKS_EVENTS=1, so the console workflow is unchanged.
+EVENTS_ENV = "WHISPERBLOCKS_EVENTS"
+EVENT_PREFIX = "@@WB "
+
 # Fallbacks preserve old configs that omit keys. The bundled template enables
 # remove_fillers and supplies its language-specific initial_prompt explicitly.
 DEFAULT_CONFIG = {
@@ -72,6 +78,40 @@ def error_detail(error: Exception, config: dict | None = None) -> str:
         if isinstance(token, str) and token.strip():
             message = message.replace(token, "[redacted]")
     return re.sub(r"hf_[A-Za-z0-9]{8,}", "[redacted]", message)
+
+
+def events_enabled() -> bool:
+    return os.environ.get(EVENTS_ENV) == "1"
+
+
+def emit_event(event: str, **data) -> None:
+    """Print one JSON progress line for the GUI; never contains tokens."""
+    if not events_enabled():
+        return
+    try:
+        line = EVENT_PREFIX + json.dumps({"event": event, **data}, ensure_ascii=False, default=str)
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def stage_progress(stage: str) -> dict:
+    """Extra WhisperX kwargs reporting percent progress, only in GUI mode."""
+    if not events_enabled():
+        return {}
+    last = [-1]
+
+    def callback(percent: float) -> None:
+        try:
+            value = max(0, min(100, int(percent)))
+        except (TypeError, ValueError):
+            return
+        if value != last[0]:
+            last[0] = value
+            emit_event("progress", stage=stage, percent=value)
+
+    return {"progress_callback": callback}
 
 
 def setup_cuda_dlls() -> None:
@@ -610,14 +650,19 @@ def transcribe_file(target: Path, config: dict) -> dict:
     # ── Stage 1 — ASR ──────────────────────────────────────────────────
     model = None
     try:
+        emit_event("stage", stage="load")
         with console.status(f"[bold yellow]1/3 Loading WhisperX model '{model_size}'...", spinner="dots"):
             model = wx.load_model(
                 model_size, device, compute_type=compute_type,
                 language=language, asr_options=asr_options,
             )
         audio = wx.load_audio(str(target))
+        emit_event("stage", stage="transcribe")
         with console.status("[bold blue]1/3 Transcribing...", spinner="arc"):
-            result = model.transcribe(audio, batch_size=config.get("batch_size", 8), language=language)
+            result = model.transcribe(
+                audio, batch_size=config.get("batch_size", 8), language=language,
+                **stage_progress("transcribe"),
+            )
     finally:
         model = None
         flush_vram()
@@ -628,11 +673,12 @@ def transcribe_file(target: Path, config: dict) -> dict:
     align_model = None
     align_metadata = None
     try:
+        emit_event("stage", stage="align")
         with console.status(f"[bold cyan]2/3 Aligning words ({detected_lang})...", spinner="arc"):
             align_model, align_metadata = wx.load_align_model(language_code=detected_lang, device=device)
             aligned = wx.align(
                 result["segments"], align_model, align_metadata, audio, device,
-                return_char_alignments=False,
+                return_char_alignments=False, **stage_progress("align"),
             )
             result["segments"] = aligned["segments"]
     except Exception as error:
@@ -647,6 +693,7 @@ def transcribe_file(target: Path, config: dict) -> dict:
     if do_diarize and hf_token:
         diarize_model = None
         try:
+            emit_event("stage", stage="diarize")
             with console.status("[bold magenta]3/3 Diarizing speakers (pyannote)...", spinner="bouncingBar"):
                 # WhisperX 3.8.x: pyannote v4, community-1, and token=.
                 from whisperx.diarize import DiarizationPipeline
@@ -656,6 +703,7 @@ def transcribe_file(target: Path, config: dict) -> dict:
                     audio,
                     min_speakers=min_speakers if min_speakers > 0 else None,
                     max_speakers=max_speakers if max_speakers > 0 else None,
+                    **stage_progress("diarize"),
                 )
                 result = wx.assign_word_speakers(diarize_segments, result)
         except Exception as error:
@@ -669,6 +717,7 @@ def transcribe_file(target: Path, config: dict) -> dict:
 
     last_end = result["segments"][-1].get("end", 0.0) if result.get("segments") else 0.0
     console.print(Text(f"Duration: {format_timestamp(last_end)} | Language: {detected_lang}\n", style="dim"))
+    emit_event("transcribed", duration=last_end, language=detected_lang)
     return result
 
 
@@ -799,6 +848,7 @@ def main(argv: list[str] | None = None) -> int:
         config = validate_config(raw_config, args.files)
     except (OSError, ValueError, RuntimeError) as error:
         console.print(Panel(Text(f"Configuration error: {error_detail(error)}"), border_style="red"))
+        emit_event("error", kind="config", message=error_detail(error))
         return 2
 
     for message in configuration_warnings(config):
@@ -806,6 +856,10 @@ def main(argv: list[str] | None = None) -> int:
     plan = build_preflight(config, overwrite=args.overwrite, project_root=root)
     display_dashboard(config, config["files"])
     display_preflight(plan, detailed=args.dry_run or args.check_config)
+    emit_event("plan", warnings=list(plan.warnings), items=[{
+        "requested": item.requested, "target": item.target, "status": item.status,
+        "reason": item.reason, "output_dir": item.output_dir,
+    } for item in plan.items])
     if args.check_config or args.dry_run:
         if args.check_config:
             console.print(Text(cuda_status()))
@@ -818,6 +872,7 @@ def main(argv: list[str] | None = None) -> int:
     runnable = plan.runnable
     if not runnable:
         display_summary(counts)
+        emit_event("summary", **vars(counts))
         return 1 if counts.failures else 0
 
     # Only a real, non-empty transcription queue may fail on CUDA availability.
@@ -832,13 +887,16 @@ def main(argv: list[str] | None = None) -> int:
             )
     except (ImportError, OSError, RuntimeError) as error:
         console.print(Panel(Text(f"Runtime error: {error_detail(error, config)}"), border_style="red"))
+        emit_event("error", kind="runtime", message=error_detail(error, config))
         counts.failed_transcription = len(runnable)
         display_summary(counts)
+        emit_event("summary", **vars(counts))
         return 1
 
     generated_timecoded: list[Path] = []
     for index, item in enumerate(runnable, start=1):
         console.rule(Text(f"File [{index}/{len(runnable)}]: {item.target.name}", style="bold cyan"))
+        emit_event("file_start", index=index, total=len(runnable), requested=item.requested)
         started = time.monotonic()
         try:
             # Recheck after preflight in case outputs appeared while processing
@@ -849,11 +907,15 @@ def main(argv: list[str] | None = None) -> int:
             if existing is not None and not args.overwrite:
                 counts.skipped_existing += 1
                 warning(f"Skipped {item.target}: output appeared at {existing}; use --overwrite to replace.")
+                emit_event("file_done", requested=item.requested, status="skipped_existing",
+                           reason=f"Existing output: {existing}")
                 continue
             claim_output_directory(item, root)
         except (OSError, ValueError, RuntimeError) as error:
             counts.failed_write += 1
             console.print(Text(f"✕ Cannot prepare outputs for {item.target}: {error_detail(error, config)}", style="red"))
+            emit_event("file_done", requested=item.requested, status="failed_write",
+                       reason=error_detail(error, config))
             continue
         transcription_failed = False
         try:
@@ -861,6 +923,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as error:
             counts.failed_transcription += 1
             console.print(Text(f"✕ Transcription {item.target}: {error_detail(error, config)}", style="red"))
+            emit_event("file_done", requested=item.requested, status="failed_transcription",
+                       reason=error_detail(error, config))
             transcription_failed = True
         if transcription_failed:
             # The handler has ended: its exception/traceback no longer retains
@@ -875,19 +939,25 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as error:
             counts.failed_write += 1
             console.print(Text(f"✕ Writing {item.target}: {error_detail(error, config)}", style="red"))
+            emit_event("file_done", requested=item.requested, status="failed_write",
+                       reason=error_detail(error, config))
             continue
         counts.succeeded += 1
         if timecoded is not None:
             generated_timecoded.append(timecoded)
         console.print(Text(f"✓ Transcribed and written in {time.monotonic() - started:.1f}s\n", style="green"))
+        emit_event("file_done", requested=item.requested, status="succeeded",
+                   seconds=round(time.monotonic() - started, 1), output_dir=item.output_dir)
 
     if config["auto_preprocess_block_seconds"] > 0 and generated_timecoded:
+        emit_event("stage", stage="preprocess")
         failures = run_preprocess(
             generated_timecoded, config["auto_preprocess_block_seconds"], overwrite=args.overwrite,
         )
         counts.failed_preprocess += failures
         counts.succeeded -= failures
     display_summary(counts)
+    emit_event("summary", **vars(counts))
     return 1 if counts.failures else 0
 
 

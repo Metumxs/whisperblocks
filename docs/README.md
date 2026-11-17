@@ -47,6 +47,7 @@
 - **Isolated environment** — dependencies live in a project-local `.venv`, never in your system Python.
 - **Secret-safe configuration** — your `config.toml` (which holds your Hugging Face token) is gitignored; a tracked template seeds it on first run.
 - **One-click setup + launcher** — `install.bat` for the first run, `run.bat` afterwards.
+- **Desktop window** — `WhisperBlocks.exe` gives the same pipeline a GUI: drag-and-drop file queue, drop-downs for every option, a prompt library, live per-file progress and a cancel button.
 
 ---
 
@@ -153,6 +154,34 @@ The setup script targets `cu128` (CUDA 12.8), which works on RTX 30-series and 4
 
 A list of all supported combinations lives at <https://download.pytorch.org/whl/>. Torch version must stay at `2.8.0` — WhisperX 3.8.6 pins `torch~=2.8.0`.
 
+### Desktop window (`WhisperBlocks.exe`)
+
+Double-click **`WhisperBlocks.exe`** (or `run-gui.bat`) to use the window instead of the console.
+The exe is a ~50 KB launcher with no Python inside: it starts `src/gui_main.py` with the same
+`.venv`, so there is still only one environment and one `config/config.toml`.
+
+- **First start:** if `.venv` is missing it offers to run `install.bat`; then it installs the window
+  packages from `requirements/requirements-gui.txt` (PySide6 + tomlkit, about 250 MB) once.
+- **Files:** drag files or folders into the list, or use *Add files…* (opens in `input/`).
+  Files dropped onto `WhisperBlocks.exe` itself are added to the queue too.
+- **Settings:** language, model, output format, blocks, speakers/token, device and batch size are
+  ordinary controls. They are saved into `config/config.toml` (comments are kept; the version from
+  before the first GUI change is preserved once as `config/config.toml.bak`), so `run.bat` keeps
+  working with exactly the same settings and file list.
+- **Prompts:** the three built-in decoder hints (Ukrainian, English, Russian) are locked. *Manage…*
+  lets you duplicate them or add your own; yours are stored in `config/prompts.toml`. The prompt
+  follows the audio language, and a warning appears when the two do not match.
+- **Running:** *Check* is `--dry-run`; *Start* runs the batch as a separate process and shows the
+  stage and percentage for the current file, elapsed/remaining time and a per-file result.
+  *Cancel* stops the whole process tree; finished files are kept.
+- **System chip (top right):** shows the detected GPU and warns about a missing GPU, CUDA build
+  or FFmpeg. A portable `ffmpeg.exe` placed in `tools\ffmpeg\` is picked up automatically.
+- Interface language (Ukrainian/English) and light/dark theme are in *Menu*.
+
+The window talks to `transcript.py` through `@@WB {json}` progress lines that are printed only
+when `WHISPERBLOCKS_EVENTS=1`; console runs are unchanged. `WhisperBlocks.exe` can be rebuilt from
+`launcher/launcher.c` with `launcher/build.sh` (MinGW-w64).
+
 ---
 
 ## 🗂️ Project Structure
@@ -162,11 +191,15 @@ WhisperBlocks/
 ├── .gitignore
 ├── install.bat
 ├── run.bat
+├── run-gui.bat                   ← starts the desktop window (console fallback for the exe)
+├── WhisperBlocks.exe             ← tiny launcher for the desktop window
 ├── requirements/
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── requirements-gui.txt      ← PySide6 + tomlkit, only for the window
 ├── config/
 │   ├── config.toml.example       ← safe template
-│   └── config.toml               ← local only; created on first run
+│   ├── config.toml               ← local only; created on first run
+│   └── prompts.toml              ← local only; your own GUI prompts
 ├── input/
 │   └── .gitkeep                  ← media contents ignored
 ├── output/
@@ -175,7 +208,10 @@ WhisperBlocks/
 ├── src/
 │   ├── transcript.py             ← ASR → alignment → optional diarization
 │   ├── preprocess.py             ← greedy fixed-duration blocks
-│   └── file_io.py                ← per-file atomic UTF-8 writes
+│   ├── file_io.py                ← per-file atomic UTF-8 writes
+│   ├── gui_main.py               ← desktop window entry point
+│   └── gui/                      ← PySide6 window; runs transcript.py as a child process
+├── launcher/                     ← C source and build script of WhisperBlocks.exe
 ├── tests/                        ← standard-library unittest suite
 └── docs/
     ├── README.md
@@ -627,7 +663,7 @@ From the project root:
 
 ```bash
 python -m unittest discover -s tests -v
-python -m py_compile src/transcript.py src/preprocess.py src/file_io.py tests/support.py tests/test_config.py tests/test_paths.py tests/test_io.py tests/test_preprocess.py tests/test_batch.py tests/test_pipeline.py tests/test_launchers.py
+python -m py_compile src/transcript.py src/preprocess.py src/file_io.py tests/support.py tests/test_config.py tests/test_paths.py tests/test_io.py tests/test_preprocess.py tests/test_batch.py tests/test_pipeline.py tests/test_launchers.py tests/test_gui.py
 python -c "import pathlib, tomllib; tomllib.loads(pathlib.Path('config/config.toml.example').read_text(encoding='utf-8')); print('TOML OK')"
 ```
 

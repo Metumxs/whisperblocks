@@ -118,6 +118,33 @@ Summary counters: succeeded, skipped_existing, missing_or_invalid,
 failed_transcription, failed_write, failed_preprocess. Optional alignment or
 diarization errors are warnings if a valid transcript remains.
 
+DESKTOP WINDOW (GUI)
+--------------------
+    WhisperBlocks.exe            (or run-gui.bat; both accept media paths)
+
+Same .venv, same config/config.toml, same src/transcript.py: the window only
+edits the config (tomlkit keeps comments; one-time config/config.toml.bak) and
+runs transcript.py as a child process. GUI packages are separate and optional:
+    .venv\Scripts\python.exe -m pip install -r requirements\requirements-gui.txt
+The launcher/batch file offers this automatically; install.bat is unchanged.
+
+The three built-in prompts are fixed in src/gui/prompts.py and cannot be edited
+or deleted in the window; user prompts live in config/prompts.toml. Window
+state (size, theme, interface language) is config/gui-state.ini. All three
+files are local/gitignored. Startup failures under pythonw are written to
+logs/gui-error.log and shown in a message box.
+
+Progress protocol: with WHISPERBLOCKS_EVENTS=1 transcript.py prints
+"@@WB {json}" lines (plan, file_start, stage, progress, file_done, summary,
+error) and passes progress_callback to WhisperX. Without the variable nothing
+changes for console runs. Events never include tokens.
+
+WhisperBlocks.exe is built from launcher/launcher.c (launcher/build.sh,
+MinGW-w64). It has no network/registry code; it only checks .venv, optionally
+starts install.bat / pip for the GUI packages, then runs
+.venv\Scripts\pythonw.exe src\gui_main.py. Unsigned executables can trigger
+SmartScreen/antivirus prompts; run-gui.bat is the equivalent fallback.
+
 CONFIG NOTES
 -------------
 auto_preprocess_block_seconds fallback/template: 60; 0 disables it. Existing
@@ -147,7 +174,7 @@ outputs skip by default; --overwrite explicitly replaces them atomically.
 OFFLINE DEVELOPMENT CHECKS (no models, GPU or network)
 -----------------------------------------------------
     python -m unittest discover -s tests -v
-    python -m py_compile src/transcript.py src/preprocess.py src/file_io.py tests/support.py tests/test_config.py tests/test_paths.py tests/test_io.py tests/test_preprocess.py tests/test_batch.py tests/test_pipeline.py tests/test_launchers.py
+    python -m py_compile src/transcript.py src/preprocess.py src/file_io.py tests/support.py tests/test_config.py tests/test_paths.py tests/test_io.py tests/test_preprocess.py tests/test_batch.py tests/test_pipeline.py tests/test_launchers.py tests/test_gui.py
     python -c "import pathlib, tomllib; tomllib.loads(pathlib.Path('config/config.toml.example').read_text(encoding='utf-8')); print('TOML OK')"
 
 Tests use only unittest/standard-library mocks and temporary synthetic files;

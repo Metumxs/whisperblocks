@@ -5,6 +5,11 @@ __pycache__/
 
 # Live configuration / secrets (the safe example stays tracked)
 /config/config.toml
+/config/config.toml.bak
+/config/config.toml.broken-*
+/config/prompts.toml
+/config/gui-state.ini
+/logs/
 .env
 .env.*
 
@@ -31,3 +36,6 @@ simple-*.txt
 *.blocks.txt
 *.srt
 *.tmp
+
+# Launcher build leftovers (WhisperBlocks.exe itself is tracked)
+/launcher/*.res

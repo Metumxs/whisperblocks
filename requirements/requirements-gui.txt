@@ -1,0 +1,11 @@
+# WhisperBlocks desktop window (optional; the console workflow does not need it).
+#
+# Installed automatically by WhisperBlocks.exe / run-gui.bat on first start,
+# into the same .venv that install.bat created. Manual install:
+#   .venv\Scripts\python.exe -m pip install -r requirements\requirements-gui.txt
+
+# Qt for Python: widgets only (the "Essentials" wheel is about a third of full PySide6).
+PySide6-Essentials>=6.8,<7
+
+# Updates config/config.toml while keeping its comments.
+tomlkit>=0.12
